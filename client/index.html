@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CryptoChat</title>
+  </head>
+  <body>
+    <p>Redirecting...</p>
+    <script>
+      const hasAuth = localStorage.getItem("cryptochat_auth_user");
+      window.location.replace(hasAuth ? "/chat.html" : "/login.html");
+    </script>
+  </body>
+</html>
