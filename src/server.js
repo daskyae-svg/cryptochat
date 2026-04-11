@@ -1,6 +1,7 @@
+const path = require("path");
 require("dotenv").config();
 
-const path = require("path");
+
 const http = require("http");
 const express = require("express");
 const cors = require("cors");
@@ -36,10 +37,11 @@ app.use(
   })
 );
 app.use(express.json());
-app.use(express.static(path.join(__dirname, "../../client")));
+app.use(express.static(path.join(__dirname, "../client")));
+
 
 app.get("/", (_req, res) => {
-  res.sendFile(path.join(__dirname, "../../client/index.html"));
+  res.sendFile(path.join(__dirname, "../client/index.html"));
 });
 
 app.get("/health", (_req, res) => {
