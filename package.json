@@ -4,8 +4,7 @@
   "description": "Secure real-time chat app backend with Express, MariaDB, Socket.io",
   "main": "src/server.js",
   "scripts": {
-    "start": "node src/server.js",
-    "dev": "node --watch src/server.js"
+    "start": "node src/server.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

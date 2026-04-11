@@ -1,13 +1,13 @@
-const path = require("path");
 require("dotenv").config();
 
-
+const fs = require("fs");
+const path = require("path");
 const http = require("http");
 const express = require("express");
 const cors = require("cors");
 const { Server } = require("socket.io");
 
-const { initDatabase, getDb } = require("./db");
+const { initDatabase, getDb, closeDatabase } = require("./db");
 const {
   generateSalt,
   hashPassword,
@@ -16,8 +16,16 @@ const {
   decryptMessage,
 } = require("./cryptoUtils");
 
-const SERVER_PORT = Number(process.env.PORT || 3000);
+const SERVER_PORT = Number(process.env.PORT || process.env.SERVER_PORT || 3000);
 const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN || "*";
+const HOST = "0.0.0.0";
+
+const primaryClientDir = path.resolve(__dirname, "..", "server", "client");
+const fallbackClientDir = path.resolve(__dirname, "..", "client");
+const clientDir = fs.existsSync(primaryClientDir)
+  ? primaryClientDir
+  : fallbackClientDir;
+const indexFilePath = path.join(clientDir, "index.html");
 
 const app = express();
 const server = http.createServer(app);
@@ -28,24 +36,29 @@ const io = new Server(server, {
   },
 });
 
-// Tracks all active sockets for each user so one account can be connected from multiple tabs/devices.
 const onlineUsers = new Map();
+let isShuttingDown = false;
+let hasStarted = false;
 
+app.set("trust proxy", 1);
 app.use(
   cors({
     origin: CLIENT_ORIGIN === "*" ? true : CLIENT_ORIGIN,
   })
 );
-app.use(express.json());
-app.use(express.static(path.join(__dirname, "../client")));
-
-
-app.get("/", (_req, res) => {
-  res.sendFile(path.join(__dirname, "../client/index.html"));
-});
+app.use(express.json({ limit: "1mb" }));
+app.use(express.static(clientDir));
 
 app.get("/health", (_req, res) => {
-  res.json({ status: "ok" });
+  res.status(200).json({
+    status: "ok",
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+  });
+});
+
+app.get("/", (_req, res) => {
+  res.sendFile(indexFilePath);
 });
 
 function toPositiveInt(value) {
@@ -160,6 +173,8 @@ app.post("/signup", async (req, res) => {
     if (error && error.code === "ER_DUP_ENTRY") {
       return res.status(409).json({ error: "Username already exists." });
     }
+
+    console.error("[signup] failed:", error);
     return res.status(500).json({ error: "Failed to create user." });
   }
 });
@@ -203,6 +218,7 @@ app.post("/login", async (req, res) => {
       },
     });
   } catch (error) {
+    console.error("[login] failed:", error);
     return res.status(500).json({ error: "Login failed." });
   }
 });
@@ -230,6 +246,7 @@ app.get("/users", async (req, res) => {
 
     return res.json({ users });
   } catch (error) {
+    console.error("[users] failed:", error);
     return res.status(500).json({ error: "Failed to load users." });
   }
 });
@@ -252,8 +269,6 @@ app.post("/send-message", async (req, res) => {
     }
 
     const savedMessage = await persistEncryptedMessage(senderId, receiverId, message);
-
-    // Push to receiver in real-time when they are online.
     emitToUser(receiverId, "receive_message", savedMessage);
 
     return res.status(201).json({
@@ -261,6 +276,7 @@ app.post("/send-message", async (req, res) => {
       data: savedMessage,
     });
   } catch (error) {
+    console.error("[send-message] failed:", error);
     return res.status(500).json({ error: "Failed to send message." });
   }
 });
@@ -307,6 +323,7 @@ app.get("/messages/:userId", async (req, res) => {
 
     return res.json({ messages });
   } catch (error) {
+    console.error("[messages] failed:", error);
     return res.status(500).json({ error: "Failed to fetch messages." });
   }
 });
@@ -350,13 +367,13 @@ io.on("connection", (socket) => {
       }
 
       const savedMessage = await persistEncryptedMessage(senderId, receiverId, message);
-
       emitToUser(receiverId, "receive_message", savedMessage);
 
       if (typeof callback === "function") {
         callback({ ok: true, message: savedMessage });
       }
     } catch (error) {
+      console.error("[socket send_message] failed:", error);
       if (typeof callback === "function") {
         callback({ ok: false, error: "Failed to send message." });
       }
@@ -381,18 +398,100 @@ io.on("connection", (socket) => {
   });
 });
 
+app.use((error, _req, res, _next) => {
+  console.error("[express] unhandled error:", error);
+  if (res.headersSent) {
+    return;
+  }
+  res.status(500).json({ error: "Internal server error." });
+});
+
 async function startServer() {
+  if (hasStarted) {
+    return;
+  }
+
   try {
     await initDatabase();
-    server.listen(SERVER_PORT, () => {
-      // eslint-disable-next-line no-console
-      console.log(`Server running on http://localhost:${SERVER_PORT}`);
+    await new Promise((resolve, reject) => {
+      const onError = (error) => {
+        server.off("listening", onListening);
+        reject(error);
+      };
+      const onListening = () => {
+        server.off("error", onError);
+        resolve();
+      };
+
+      server.once("error", onError);
+      server.once("listening", onListening);
+      server.listen(SERVER_PORT, HOST);
     });
+
+    hasStarted = true;
+    console.log(`[startup] Server listening on port ${SERVER_PORT}`);
+    console.log(`[startup] Static client directory: ${clientDir}`);
   } catch (error) {
-    // eslint-disable-next-line no-console
-    console.error("Failed to start server:", error.message);
+    console.error("[startup] Failed to start:", error);
     process.exit(1);
   }
 }
 
-startServer();
+async function shutdown(signal) {
+  if (isShuttingDown) {
+    return;
+  }
+  isShuttingDown = true;
+
+  console.log(`[shutdown] Received ${signal}. Closing resources...`);
+
+  const forceCloseTimer = setTimeout(() => {
+    console.error("[shutdown] Forced exit after timeout.");
+    process.exit(1);
+  }, 10_000);
+  if (typeof forceCloseTimer.unref === "function") {
+    forceCloseTimer.unref();
+  }
+
+  try {
+    io.close();
+    if (server.listening) {
+      await new Promise((resolve) => server.close(resolve));
+    }
+    await closeDatabase();
+    clearTimeout(forceCloseTimer);
+    console.log("[shutdown] Complete.");
+    process.exit(0);
+  } catch (error) {
+    clearTimeout(forceCloseTimer);
+    console.error("[shutdown] Failed:", error);
+    process.exit(1);
+  }
+}
+
+process.on("SIGTERM", () => {
+  shutdown("SIGTERM");
+});
+
+process.on("SIGINT", () => {
+  shutdown("SIGINT");
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("[process] Unhandled rejection:", reason);
+});
+
+process.on("uncaughtException", (error) => {
+  console.error("[process] Uncaught exception:", error);
+});
+
+if (require.main === module) {
+  startServer();
+}
+
+module.exports = {
+  app,
+  server,
+  io,
+  startServer,
+};

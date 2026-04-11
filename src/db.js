@@ -1,6 +1,6 @@
-const DATABASE_URL = process.env.MYSQL_URL;
 const mysql = require("mysql2/promise");
 
+const DATABASE_URL = process.env.MYSQL_URL ? String(process.env.MYSQL_URL).trim() : "";
 const {
   DB_HOST = "localhost",
   DB_PORT = "3306",
@@ -9,41 +9,71 @@ const {
   DB_NAME = "cryptochat",
 } = process.env;
 
-if (!/^[A-Za-z0-9_]+$/.test(DB_NAME)) {
+if (!DATABASE_URL && !/^[A-Za-z0-9_]+$/.test(DB_NAME)) {
   throw new Error("DB_NAME can only contain letters, numbers, and underscores.");
 }
 
 let pool;
 
-async function initDatabase() {
-  const bootstrapConnection = DATABASE_URL
-  ? await mysql.createConnection(DATABASE_URL)
-  : await mysql.createConnection({
-      host: DB_HOST,
-      port: Number(DB_PORT),
-      user: DB_USER,
-      password: DB_PASSWORD,
-    });
+function buildPoolConfig() {
+  if (DATABASE_URL) {
+    return {
+      uri: DATABASE_URL,
+      waitForConnections: true,
+      connectionLimit: Number(process.env.DB_POOL_SIZE || 10),
+      queueLimit: 0,
+      enableKeepAlive: true,
+      keepAliveInitialDelay: 0,
+      timezone: "Z",
+    };
+  }
 
- if (!DATABASE_URL) {
-  await bootstrapConnection.query(`CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\``);
+  return {
+    host: DB_HOST,
+    port: Number(DB_PORT),
+    user: DB_USER,
+    password: DB_PASSWORD,
+    database: DB_NAME,
+    waitForConnections: true,
+    connectionLimit: Number(process.env.DB_POOL_SIZE || 10),
+    queueLimit: 0,
+    enableKeepAlive: true,
+    keepAliveInitialDelay: 0,
+    timezone: "Z",
+  };
 }
 
-await bootstrapConnection.end();
+async function verifyPoolConnection() {
+  const connection = await pool.getConnection();
+  try {
+    await connection.ping();
+  } finally {
+    connection.release();
+  }
+}
 
- pool = DATABASE_URL
-  ? mysql.createPool(DATABASE_URL)
-  : mysql.createPool({
+async function initDatabase() {
+  if (pool) {
+    return pool;
+  }
+
+  if (!DATABASE_URL) {
+    const bootstrapConnection = await mysql.createConnection({
       host: DB_HOST,
       port: Number(DB_PORT),
       user: DB_USER,
       password: DB_PASSWORD,
-      database: DB_NAME,
-      waitForConnections: true,
-      connectionLimit: 10,
-      queueLimit: 0,
-      timezone: "Z",
     });
+
+    try {
+      await bootstrapConnection.query(`CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\``);
+    } finally {
+      await bootstrapConnection.end();
+    }
+  }
+
+  pool = mysql.createPool(buildPoolConfig());
+  await verifyPoolConnection();
 
   await createTables();
   return pool;
@@ -86,7 +116,18 @@ function getDb() {
   return pool;
 }
 
+async function closeDatabase() {
+  if (!pool) {
+    return;
+  }
+
+  const activePool = pool;
+  pool = null;
+  await activePool.end();
+}
+
 module.exports = {
   initDatabase,
   getDb,
+  closeDatabase,
 };
