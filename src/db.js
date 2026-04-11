@@ -1,3 +1,4 @@
+const DATABASE_URL = process.env.MYSQL_URL;
 const mysql = require("mysql2/promise");
 
 const {
@@ -15,27 +16,34 @@ if (!/^[A-Za-z0-9_]+$/.test(DB_NAME)) {
 let pool;
 
 async function initDatabase() {
-  const bootstrapConnection = await mysql.createConnection({
-    host: DB_HOST,
-    port: Number(DB_PORT),
-    user: DB_USER,
-    password: DB_PASSWORD,
-  });
+  const bootstrapConnection = DATABASE_URL
+  ? await mysql.createConnection(DATABASE_URL)
+  : await mysql.createConnection({
+      host: DB_HOST,
+      port: Number(DB_PORT),
+      user: DB_USER,
+      password: DB_PASSWORD,
+    });
 
+ if (!DATABASE_URL) {
   await bootstrapConnection.query(`CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\``);
-  await bootstrapConnection.end();
+}
 
-  pool = mysql.createPool({
-    host: DB_HOST,
-    port: Number(DB_PORT),
-    user: DB_USER,
-    password: DB_PASSWORD,
-    database: DB_NAME,
-    waitForConnections: true,
-    connectionLimit: 10,
-    queueLimit: 0,
-    timezone: "Z",
-  });
+await bootstrapConnection.end();
+
+ pool = DATABASE_URL
+  ? mysql.createPool(DATABASE_URL)
+  : mysql.createPool({
+      host: DB_HOST,
+      port: Number(DB_PORT),
+      user: DB_USER,
+      password: DB_PASSWORD,
+      database: DB_NAME,
+      waitForConnections: true,
+      connectionLimit: 10,
+      queueLimit: 0,
+      timezone: "Z",
+    });
 
   await createTables();
   return pool;
