@@ -15,7 +15,7 @@ const {
   decryptMessage,
 } = require("./cryptoUtils");
 
-const SERVER_PORT = Number(process.env.SERVER_PORT || 3000);
+const SERVER_PORT = Number(process.env.PORT || 3000);
 const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN || "*";
 
 const app = express();
