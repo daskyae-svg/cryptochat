@@ -13,91 +13,141 @@
     <link rel="stylesheet" href="/css/styles.css" />
   </head>
   <body class="chat-body">
-    <main class="chat-shell">
-      <aside class="sidebar">
-        <div class="brand-row">
-          <div class="brand-dot"></div>
-          <div>
-            <h1 class="brand-title">CryptoChat</h1>
-            <p id="currentUserLabel" class="brand-subtitle"></p>
-          </div>
+    <div class="app-window">
+      <header class="window-chrome">
+        <div class="window-dots">
+          <span class="dot dot-red"></span>
+          <span class="dot dot-yellow"></span>
+          <span class="dot dot-green"></span>
         </div>
+        <div class="window-search-fake"></div>
+      </header>
 
-        <div class="sidebar-top-actions">
-          <button id="themeToggleBtn" type="button" class="secondary-btn">Dark Mode</button>
-          <button id="refreshUsersBtn" type="button" class="secondary-btn">Refresh</button>
-          <button id="logoutBtn" type="button" class="danger-btn">Logout</button>
-        </div>
+      <main class="messenger-shell">
+        <nav class="app-rail">
+          <button id="navChatsBtn" type="button" class="rail-btn rail-btn-active">Chats</button>
 
-        <label class="search-wrap" for="userSearchInput">
-          <span>Search users</span>
-          <input
-            id="userSearchInput"
-            type="text"
-            placeholder="Search by username..."
-            autocomplete="off"
-          />
-        </label>
+          <button id="navProfileBtn" type="button" class="rail-btn rail-profile-btn">
+            <div id="currentUserRailAvatar" class="avatar avatar-rail">?</div>
+            <span>Profile</span>
+          </button>
 
-        <div id="conversationList" class="conversation-list"></div>
-      </aside>
+          <button id="navSettingsBtn" type="button" class="rail-btn">Settings</button>
 
-      <section class="chat-main">
-        <header class="chat-header">
-          <div class="chat-user-meta">
-            <div id="activeUserAvatar" class="avatar avatar-lg">?</div>
-            <div>
-              <h2 id="activeChatLabel">Select a conversation</h2>
-              <p id="typingIndicator" class="typing-label hidden"></p>
-            </div>
-          </div>
-          <span id="socketStatus" class="socket-status">Offline</span>
-        </header>
+          <div class="rail-spacer"></div>
+          <button id="navLogoutBtn" type="button" class="rail-btn rail-logout-btn">Logout</button>
+        </nav>
 
-        <section id="messagesContainer" class="messages" aria-live="polite"></section>
+        <aside class="conversation-pane">
+          <header class="conversation-pane-head">
+            <h1>Chats</h1>
+            <p id="currentUserLabel"></p>
+          </header>
 
-        <section id="gifPicker" class="gif-picker hidden">
-          <div class="gif-picker-head">
+          <label class="search-wrap" for="userSearchInput">
+            <span>Search users</span>
             <input
-              id="gifSearchInput"
+              id="userSearchInput"
               type="text"
-              placeholder="Search GIFs..."
+              placeholder="Search by username..."
               autocomplete="off"
             />
-            <button id="manualGifBtn" type="button" class="secondary-btn">Paste URL</button>
-            <button id="closeGifBtn" type="button" class="secondary-btn">Close</button>
-          </div>
-          <div id="gifResults" class="gif-results"></div>
+          </label>
+
+          <div id="conversationList" class="conversation-list"></div>
+        </aside>
+
+        <section class="chat-main">
+          <header class="chat-header">
+            <div class="chat-user-meta">
+              <div id="activeUserAvatar" class="avatar avatar-lg">?</div>
+              <div>
+                <h2 id="activeChatLabel">Select a conversation</h2>
+                <p id="typingIndicator" class="typing-label hidden"></p>
+              </div>
+            </div>
+            <span id="socketStatus" class="socket-status">Offline</span>
+          </header>
+
+          <section id="messagesContainer" class="messages" aria-live="polite"></section>
+
+          <section id="gifPicker" class="gif-picker hidden">
+            <div class="gif-picker-head">
+              <input
+                id="gifSearchInput"
+                type="text"
+                placeholder="Search GIFs..."
+                autocomplete="off"
+              />
+              <button id="manualGifBtn" type="button" class="secondary-btn">Paste URL</button>
+              <button id="closeGifBtn" type="button" class="secondary-btn">Close</button>
+            </div>
+            <div id="gifResults" class="gif-results"></div>
+          </section>
+
+          <form id="messageForm" class="composer">
+            <input id="imageInput" type="file" accept="image/*" hidden />
+            <div id="emojiPanel" class="emoji-panel hidden"></div>
+
+            <div class="composer-row">
+              <div class="composer-tools">
+                <button id="emojiToggleBtn" type="button" class="icon-btn" title="Emoji">:)</button>
+                <button id="imageUploadBtn" type="button" class="icon-btn" title="Upload image">
+                  +
+                </button>
+                <button id="gifToggleBtn" type="button" class="icon-btn" title="Send GIF">GIF</button>
+              </div>
+
+              <textarea
+                id="messageInput"
+                rows="1"
+                maxlength="3000"
+                placeholder="Type a message..."
+              ></textarea>
+
+              <button id="sendBtn" type="submit" class="send-btn">Send</button>
+            </div>
+          </form>
+
+          <p id="statusMessage" class="status"></p>
         </section>
 
-        <form id="messageForm" class="composer">
-          <input id="imageInput" type="file" accept="image/*" hidden />
+        <aside id="settingsPanel" class="settings-panel hidden">
+          <header class="settings-head">
+            <h3>Settings</h3>
+            <button id="closeSettingsBtn" type="button" class="icon-btn settings-close-btn">x</button>
+          </header>
 
-          <div id="emojiPanel" class="emoji-panel hidden"></div>
+          <section class="settings-card">
+            <h4>Appearance</h4>
+            <p>Switch between light and dark themes.</p>
+            <button id="themeToggleBtn" type="button" class="secondary-btn">Dark Mode</button>
+          </section>
 
-          <div class="composer-row">
-            <div class="composer-tools">
-              <button id="emojiToggleBtn" type="button" class="icon-btn" title="Emoji">☺</button>
-              <button id="imageUploadBtn" type="button" class="icon-btn" title="Upload image">
-                +
-              </button>
-              <button id="gifToggleBtn" type="button" class="icon-btn" title="Send GIF">GIF</button>
+          <section class="settings-card">
+            <h4>Profile Picture</h4>
+            <div class="profile-preview-row">
+              <div id="settingsAvatarPreview" class="avatar avatar-xl">?</div>
+              <div>
+                <p id="settingsUsernameLabel" class="settings-username">User</p>
+                <p class="settings-note">Shown in conversation list and chat header.</p>
+              </div>
             </div>
+            <div class="settings-actions">
+              <input id="profileAvatarInput" type="file" accept="image/*" hidden />
+              <button id="changeAvatarBtn" type="button" class="secondary-btn">Change Photo</button>
+              <button id="removeAvatarBtn" type="button" class="secondary-btn">Remove</button>
+            </div>
+          </section>
 
-            <textarea
-              id="messageInput"
-              rows="1"
-              maxlength="3000"
-              placeholder="Type a message..."
-            ></textarea>
-
-            <button id="sendBtn" type="submit" class="send-btn">Send</button>
-          </div>
-        </form>
-
-        <p id="statusMessage" class="status"></p>
-      </section>
-    </main>
+          <section class="settings-card">
+            <h4>Data</h4>
+            <p>Reload conversation list without refreshing browser.</p>
+            <button id="refreshUsersBtn" type="button" class="secondary-btn">Refresh Chats</button>
+          </section>
+        </aside>
+      </main>
+    </div>
 
     <script src="/socket.io/socket.io.js"></script>
     <script src="/js/config.js"></script>

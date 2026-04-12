@@ -5,1047 +5,832 @@ document.addEventListener("DOMContentLoaded", () => {
     return;
   }
 
-  const THEME_STORAGE_KEY = "cryptochat_theme";
-  const TYPING_DEBOUNCE_MS = 1200;
-  const SCROLL_BOTTOM_THRESHOLD = 110;
-  const MAX_IMAGE_SIZE_BYTES = 2 * 1024 * 1024;
-  const DEFAULT_GIF_SEARCH = "funny";
+  const $ = (id) => document.getElementById(id);
+  const MSG = { TEXT: "text", IMAGE: "image", GIF: "gif", DELETED: "deleted" };
   const EMOJIS = [
-    "😀",
-    "😄",
-    "😂",
-    "🥳",
-    "😍",
-    "😎",
-    "🤝",
-    "🔥",
-    "🎉",
-    "👏",
-    "❤️",
-    "👌",
-    "💡",
-    "😅",
-    "😭",
-    "😴",
-    "😇",
-    "🤖",
+    "\uD83D\uDE00",
+    "\uD83D\uDE04",
+    "\uD83D\uDE02",
+    "\uD83E\uDD73",
+    "\uD83D\uDE0D",
+    "\uD83D\uDD25",
+    "\uD83C\uDF89",
+    "\u2764\uFE0F",
+    "\uD83D\uDC4D",
+    "\uD83E\uDD16",
   ];
 
-  const MESSAGE_TYPES = {
-    TEXT: "text",
-    IMAGE: "image",
-    GIF: "gif",
-    DELETED: "deleted",
+  const els = {
+    currentUserLabel: $("currentUserLabel"),
+    currentUserRailAvatar: $("currentUserRailAvatar"),
+    activeChatLabel: $("activeChatLabel"),
+    activeUserAvatar: $("activeUserAvatar"),
+    typingIndicator: $("typingIndicator"),
+    socketStatus: $("socketStatus"),
+    statusMessage: $("statusMessage"),
+    conversationList: $("conversationList"),
+    userSearchInput: $("userSearchInput"),
+    messagesContainer: $("messagesContainer"),
+    messageForm: $("messageForm"),
+    messageInput: $("messageInput"),
+    emojiPanel: $("emojiPanel"),
+    emojiToggleBtn: $("emojiToggleBtn"),
+    imageUploadBtn: $("imageUploadBtn"),
+    imageInput: $("imageInput"),
+    gifToggleBtn: $("gifToggleBtn"),
+    gifPicker: $("gifPicker"),
+    closeGifBtn: $("closeGifBtn"),
+    manualGifBtn: $("manualGifBtn"),
+    gifSearchInput: $("gifSearchInput"),
+    gifResults: $("gifResults"),
+    themeToggleBtn: $("themeToggleBtn"),
+    refreshUsersBtn: $("refreshUsersBtn"),
+    navChatsBtn: $("navChatsBtn"),
+    navProfileBtn: $("navProfileBtn"),
+    navSettingsBtn: $("navSettingsBtn"),
+    navLogoutBtn: $("navLogoutBtn"),
+    settingsPanel: $("settingsPanel"),
+    closeSettingsBtn: $("closeSettingsBtn"),
+    settingsAvatarPreview: $("settingsAvatarPreview"),
+    settingsUsernameLabel: $("settingsUsernameLabel"),
+    changeAvatarBtn: $("changeAvatarBtn"),
+    removeAvatarBtn: $("removeAvatarBtn"),
+    profileAvatarInput: $("profileAvatarInput"),
   };
-
-  const currentUserLabel = document.getElementById("currentUserLabel");
-  const activeChatLabel = document.getElementById("activeChatLabel");
-  const activeUserAvatar = document.getElementById("activeUserAvatar");
-  const typingIndicator = document.getElementById("typingIndicator");
-  const socketStatus = document.getElementById("socketStatus");
-  const statusMessage = document.getElementById("statusMessage");
-  const conversationList = document.getElementById("conversationList");
-  const userSearchInput = document.getElementById("userSearchInput");
-  const messagesContainer = document.getElementById("messagesContainer");
-  const messageForm = document.getElementById("messageForm");
-  const messageInput = document.getElementById("messageInput");
-  const emojiPanel = document.getElementById("emojiPanel");
-  const emojiToggleBtn = document.getElementById("emojiToggleBtn");
-  const imageUploadBtn = document.getElementById("imageUploadBtn");
-  const imageInput = document.getElementById("imageInput");
-  const gifToggleBtn = document.getElementById("gifToggleBtn");
-  const gifPicker = document.getElementById("gifPicker");
-  const closeGifBtn = document.getElementById("closeGifBtn");
-  const manualGifBtn = document.getElementById("manualGifBtn");
-  const gifSearchInput = document.getElementById("gifSearchInput");
-  const gifResults = document.getElementById("gifResults");
-  const themeToggleBtn = document.getElementById("themeToggleBtn");
-  const refreshUsersBtn = document.getElementById("refreshUsersBtn");
-  const logoutBtn = document.getElementById("logoutBtn");
-
-  currentUserLabel.textContent = `@${currentUser.username}`;
 
   const state = {
     conversations: [],
     selectedUserId: null,
     selectedUsername: "",
-    messageElementsById: new Map(),
-    messageStatusById: new Map(),
-    unreadUserIds: new Set(),
-    typingUserIds: new Set(),
+    selectedAvatarUrl: null,
+    messageNodes: new Map(),
+    messageStatus: new Map(),
+    unread: new Set(),
+    typingUsers: new Set(),
     userMap: new Map(),
-    isTypingEmitted: false,
-    typingTimeoutId: null,
-    gifSearchTimeoutId: null,
+    typingSent: false,
+    typingTimer: null,
+    gifTimer: null,
   };
 
-  const socket = io(window.APP_CONFIG.SOCKET_URL, {
-    transports: ["websocket", "polling"],
-  });
+  const socket = io(window.APP_CONFIG.SOCKET_URL, { transports: ["websocket", "polling"] });
+  const THEME_KEY = "cryptochat_theme";
+  const TYPING_MS = 1200;
+  const BOTTOM_GAP = 110;
+  const MAX_IMG = 2 * 1024 * 1024;
+  const GIF_DEFAULT = "funny";
 
-  function getInitials(username) {
-    const parts = String(username || "")
+  const norm = (v) => {
+    if (v === undefined || v === null) return null;
+    const s = String(v).trim();
+    return s || null;
+  };
+  const initials = (u) =>
+    (String(u || "")
       .trim()
       .split(/\s+/)
-      .filter(Boolean);
-    if (parts.length === 0) {
-      return "?";
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((p) => p[0].toUpperCase())
+      .join("") || "?");
+  const setStatus = (m, err) => {
+    els.statusMessage.textContent = m || "";
+    els.statusMessage.style.color = err ? "var(--danger)" : "var(--muted)";
+  };
+  const t = (v) => {
+    const d = new Date(v);
+    return Number.isNaN(d.getTime())
+      ? ""
+      : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  };
+  const tConv = (v) => {
+    const d = new Date(v);
+    if (Number.isNaN(d.getTime())) return "";
+    const n = new Date();
+    if (
+      d.getDate() === n.getDate() &&
+      d.getMonth() === n.getMonth() &&
+      d.getFullYear() === n.getFullYear()
+    ) {
+      return t(d);
     }
-    const initials = parts.slice(0, 2).map((part) => part[0].toUpperCase());
-    return initials.join("");
-  }
-
-  function formatTime(value) {
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) {
-      return "";
-    }
-    return date.toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  }
-
-  function formatConversationTime(value) {
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) {
-      return "";
-    }
-
-    const now = new Date();
-    const sameDay =
-      date.getDate() === now.getDate() &&
-      date.getMonth() === now.getMonth() &&
-      date.getFullYear() === now.getFullYear();
-
-    if (sameDay) {
-      return formatTime(date);
-    }
-
-    const month = String(date.getMonth() + 1).padStart(2, "0");
-    const day = String(date.getDate()).padStart(2, "0");
-    return `${month}/${day}`;
-  }
-
-  function setStatus(message, isError) {
-    statusMessage.textContent = message || "";
-    statusMessage.style.color = isError ? "var(--danger)" : "var(--muted)";
-  }
-
-  function isNearBottom() {
-    const distanceToBottom =
-      messagesContainer.scrollHeight -
-      messagesContainer.scrollTop -
-      messagesContainer.clientHeight;
-    return distanceToBottom <= SCROLL_BOTTOM_THRESHOLD;
-  }
-
-  function scrollToBottom(force) {
-    if (!force && !isNearBottom()) {
-      return;
-    }
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
-  }
-
+    return `${String(d.getMonth() + 1).padStart(2, "0")}/${String(d.getDate()).padStart(2, "0")}`;
+  };
+  const nearBottom = () =>
+    els.messagesContainer.scrollHeight -
+      els.messagesContainer.scrollTop -
+      els.messagesContainer.clientHeight <=
+    BOTTOM_GAP;
+  const scrollBottom = (force) => {
+    if (!force && !nearBottom()) return;
+    els.messagesContainer.scrollTop = els.messagesContainer.scrollHeight;
+  };
   function updateSocketStatus() {
     if (socket.connected) {
-      socketStatus.textContent = "Online";
-      socketStatus.classList.add("online");
+      els.socketStatus.textContent = "Online";
+      els.socketStatus.classList.add("online");
       return;
     }
-    socketStatus.textContent = "Offline";
-    socketStatus.classList.remove("online");
+    els.socketStatus.textContent = "Offline";
+    els.socketStatus.classList.remove("online");
+  }
+  const isOpenConv = (m) =>
+    state.selectedUserId &&
+    ((m.senderId === currentUser.id && m.receiverId === state.selectedUserId) ||
+      (m.senderId === state.selectedUserId && m.receiverId === currentUser.id));
+  const preview = (type, text) => {
+    if (type === MSG.DELETED) return "Message deleted";
+    if (type === MSG.IMAGE) return text ? `Photo: ${text}` : "Photo";
+    if (type === MSG.GIF) return text ? `GIF: ${text}` : "GIF";
+    return (String(text || "").replace(/\s+/g, " ").trim() || "Start chatting").slice(0, 70);
+  };
+
+  function paintAvatar(node, username, avatarUrl) {
+    node.innerHTML = "";
+    const url = norm(avatarUrl);
+    if (url) {
+      const img = document.createElement("img");
+      img.className = "avatar-image";
+      img.src = url;
+      img.alt = `${username || "User"} avatar`;
+      node.appendChild(img);
+      return;
+    }
+    node.textContent = initials(username);
+  }
+
+  function renderCurrentUser() {
+    els.currentUserLabel.textContent = `@${currentUser.username}`;
+    els.settingsUsernameLabel.textContent = currentUser.username;
+    paintAvatar(els.currentUserRailAvatar, currentUser.username, currentUser.avatarUrl);
+    paintAvatar(els.settingsAvatarPreview, currentUser.username, currentUser.avatarUrl);
   }
 
   function applyTheme(theme) {
-    const isDark = theme === "dark";
-    document.body.classList.toggle("theme-dark", isDark);
-    themeToggleBtn.textContent = isDark ? "Light Mode" : "Dark Mode";
+    const dark = theme === "dark";
+    document.body.classList.toggle("theme-dark", dark);
+    els.themeToggleBtn.textContent = dark ? "Light Mode" : "Dark Mode";
   }
 
-  function initTheme() {
-    const storedTheme = localStorage.getItem(THEME_STORAGE_KEY) || "light";
-    applyTheme(storedTheme);
-  }
-
-  function toggleTheme() {
-    const nextTheme = document.body.classList.contains("theme-dark") ? "light" : "dark";
-    localStorage.setItem(THEME_STORAGE_KEY, nextTheme);
-    applyTheme(nextTheme);
-  }
-
-  function conversationPreview(messageType, messageText) {
-    if (messageType === MESSAGE_TYPES.DELETED) {
-      return "Message deleted";
-    }
-    if (messageType === MESSAGE_TYPES.IMAGE) {
-      return messageText ? `Photo: ${messageText}` : "Photo";
-    }
-    if (messageType === MESSAGE_TYPES.GIF) {
-      return messageText ? `GIF: ${messageText}` : "GIF";
-    }
-    return messageText || "Start chatting";
-  }
-
-  function sortConversations() {
-    state.conversations.sort((left, right) => {
-      const leftTime = left.lastMessage ? new Date(left.lastMessage.createdAt).getTime() : 0;
-      const rightTime = right.lastMessage ? new Date(right.lastMessage.createdAt).getTime() : 0;
-      if (leftTime !== rightTime) {
-        return rightTime - leftTime;
-      }
-      return left.username.localeCompare(right.username);
-    });
+  function setSettings(show) {
+    els.settingsPanel.classList.toggle("hidden", !show);
   }
 
   function renderConversations() {
-    const term = userSearchInput.value.trim().toLowerCase();
-    conversationList.innerHTML = "";
-
-    const filtered = state.conversations.filter((conversation) =>
-      conversation.username.toLowerCase().includes(term)
-    );
-
-    if (filtered.length === 0) {
-      const empty = document.createElement("p");
-      empty.className = "status";
-      empty.textContent = "No matching users.";
-      conversationList.appendChild(empty);
+    const term = els.userSearchInput.value.trim().toLowerCase();
+    els.conversationList.innerHTML = "";
+    const list = state.conversations.filter((c) => c.username.toLowerCase().includes(term));
+    if (!list.length) {
+      const p = document.createElement("p");
+      p.className = "status";
+      p.textContent = "No matching users.";
+      els.conversationList.appendChild(p);
       return;
     }
 
-    filtered.forEach((conversation) => {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "conversation-item";
+    list.forEach((c) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "conversation-item";
+      if (c.userId === state.selectedUserId) b.classList.add("active");
+      if (state.unread.has(c.userId)) b.classList.add("unread");
 
-      if (conversation.userId === state.selectedUserId) {
-        button.classList.add("active");
-      }
-      if (state.unreadUserIds.has(conversation.userId)) {
-        button.classList.add("unread");
-      }
+      const av = document.createElement("div");
+      av.className = "avatar";
+      paintAvatar(av, c.username, c.avatarUrl);
 
-      const avatar = document.createElement("div");
-      avatar.className = "avatar";
-      avatar.textContent = getInitials(conversation.username);
-
-      const content = document.createElement("div");
-      content.className = "conversation-main";
-
+      const main = document.createElement("div");
+      main.className = "conversation-main";
       const top = document.createElement("div");
       top.className = "conversation-top";
+      const u = document.createElement("span");
+      u.className = "conversation-username";
+      u.textContent = c.username;
+      const tm = document.createElement("span");
+      tm.className = "conversation-time";
+      tm.textContent = c.lastMessage ? tConv(c.lastMessage.createdAt) : "";
+      top.append(u, tm);
 
-      const username = document.createElement("span");
-      username.className = "conversation-username";
-      username.textContent = conversation.username;
-
-      const time = document.createElement("span");
-      time.className = "conversation-time";
-      time.textContent = conversation.lastMessage
-        ? formatConversationTime(conversation.lastMessage.createdAt)
-        : "";
-
-      top.appendChild(username);
-      top.appendChild(time);
-
-      const preview = document.createElement("div");
-      preview.className = "conversation-preview";
-      if (state.typingUserIds.has(conversation.userId)) {
-        preview.textContent = "Typing...";
-      } else if (conversation.lastMessage) {
-        preview.textContent = conversation.lastMessage.preview;
-      } else {
-        preview.textContent = "Say hello";
-      }
-
-      content.appendChild(top);
-      content.appendChild(preview);
-      button.appendChild(avatar);
-      button.appendChild(content);
-
-      button.addEventListener("click", () => {
-        selectConversation(conversation.userId);
-      });
-
-      conversationList.appendChild(button);
+      const pv = document.createElement("div");
+      pv.className = "conversation-preview";
+      pv.textContent = state.typingUsers.has(c.userId)
+        ? "Typing..."
+        : c.lastMessage
+          ? c.lastMessage.preview
+          : "Say hello";
+      main.append(top, pv);
+      b.append(av, main);
+      b.addEventListener("click", () => selectConversation(c.userId));
+      els.conversationList.appendChild(b);
     });
   }
 
-  function setActiveConversationHeader() {
+  function setHeader() {
     if (!state.selectedUserId) {
-      activeChatLabel.textContent = "Select a conversation";
-      activeUserAvatar.textContent = "?";
-      typingIndicator.textContent = "";
-      typingIndicator.classList.add("hidden");
+      els.activeChatLabel.textContent = "Select a conversation";
+      paintAvatar(els.activeUserAvatar, "?", null);
+      els.typingIndicator.classList.add("hidden");
+      els.typingIndicator.textContent = "";
       return;
     }
-
-    activeChatLabel.textContent = state.selectedUsername;
-    activeUserAvatar.textContent = getInitials(state.selectedUsername);
-    updateTypingIndicator();
-  }
-
-  function updateTypingIndicator() {
-    if (!state.selectedUserId || !state.typingUserIds.has(state.selectedUserId)) {
-      typingIndicator.textContent = "";
-      typingIndicator.classList.add("hidden");
-      return;
+    els.activeChatLabel.textContent = state.selectedUsername;
+    paintAvatar(els.activeUserAvatar, state.selectedUsername, state.selectedAvatarUrl);
+    if (state.typingUsers.has(state.selectedUserId)) {
+      els.typingIndicator.textContent = `${state.selectedUsername} is typing`;
+      els.typingIndicator.classList.remove("hidden");
+    } else {
+      els.typingIndicator.textContent = "";
+      els.typingIndicator.classList.add("hidden");
     }
-
-    typingIndicator.textContent = `${state.selectedUsername} is typing`;
-    typingIndicator.classList.remove("hidden");
   }
 
-  function updateConversationWithMessage(message) {
-    const otherUserId =
-      message.senderId === currentUser.id ? message.receiverId : message.senderId;
-
-    let conversation = state.conversations.find((item) => item.userId === otherUserId);
-    if (!conversation) {
-      const userFromMap = state.userMap.get(otherUserId);
-      conversation = {
-        userId: otherUserId,
-        username: userFromMap ? userFromMap.username : `User ${otherUserId}`,
-        lastMessage: null,
-      };
-      state.conversations.push(conversation);
-    }
-
-    conversation.lastMessage = {
-      id: message.id,
-      senderId: message.senderId,
-      messageType: message.messageType,
-      preview: conversationPreview(message.messageType, String(message.message || "").trim()),
-      createdAt: message.createdAt,
-    };
-
-    sortConversations();
-    renderConversations();
-  }
-
-  function clearMessagesView() {
-    state.messageElementsById.clear();
-    messagesContainer.innerHTML = "";
-  }
-
-  function appendTextWithBreaks(target, text) {
-    const parts = String(text || "").split("\n");
-    parts.forEach((part, index) => {
-      target.appendChild(document.createTextNode(part));
-      if (index < parts.length - 1) {
-        target.appendChild(document.createElement("br"));
-      }
+  function sortConversations() {
+    state.conversations.sort((a, b) => {
+      const at = a.lastMessage ? new Date(a.lastMessage.createdAt).getTime() : 0;
+      const bt = b.lastMessage ? new Date(b.lastMessage.createdAt).getTime() : 0;
+      return bt - at || a.username.localeCompare(b.username);
     });
   }
 
-  function appendFormattedMessage(target, text) {
-    const messageText = String(text || "");
-    const linkRegex = /(https?:\/\/[^\s<]+|www\.[^\s<]+)/gi;
-    let cursor = 0;
-    let match = linkRegex.exec(messageText);
-
-    while (match) {
-      appendTextWithBreaks(target, messageText.slice(cursor, match.index));
-
-      const urlText = match[0];
-      const href = urlText.startsWith("http") ? urlText : `https://${urlText}`;
-      const link = document.createElement("a");
-      link.href = href;
-      link.textContent = urlText;
-      link.target = "_blank";
-      link.rel = "noopener noreferrer";
-      target.appendChild(link);
-
-      cursor = match.index + urlText.length;
-      match = linkRegex.exec(messageText);
+  function htmlWithLinks(text) {
+    const out = document.createElement("p");
+    out.className = "message-text";
+    const src = String(text || "");
+    const re = /(https?:\/\/[^\s<]+|www\.[^\s<]+)/gi;
+    let i = 0;
+    let m = re.exec(src);
+    while (m) {
+      addText(out, src.slice(i, m.index));
+      const url = m[0];
+      const a = document.createElement("a");
+      a.href = url.startsWith("http") ? url : `https://${url}`;
+      a.textContent = url;
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+      out.appendChild(a);
+      i = m.index + url.length;
+      m = re.exec(src);
     }
-
-    appendTextWithBreaks(target, messageText.slice(cursor));
+    addText(out, src.slice(i));
+    return out;
   }
 
-  function createMessageNode(message) {
+  function addText(node, text) {
+    String(text || "")
+      .split("\n")
+      .forEach((line, idx, arr) => {
+        node.appendChild(document.createTextNode(line));
+        if (idx < arr.length - 1) node.appendChild(document.createElement("br"));
+      });
+  }
+
+  function messageNode(m) {
+    const self = m.senderId === currentUser.id;
     const row = document.createElement("article");
-    const isSelf = message.senderId === currentUser.id;
-    row.className = `message-row ${isSelf ? "self" : "other"}`;
-    row.dataset.messageId = String(message.id);
+    row.className = `message-row ${self ? "self" : "other"}`;
+    row.dataset.messageId = String(m.id);
 
     const bubble = document.createElement("div");
     bubble.className = "message-bubble";
-
-    if ((message.messageType === MESSAGE_TYPES.IMAGE || message.messageType === MESSAGE_TYPES.GIF) && message.mediaUrl) {
-      const media = document.createElement("img");
-      media.className = "message-media";
-      media.src = message.mediaUrl;
-      media.alt = message.messageType === MESSAGE_TYPES.GIF ? "GIF message" : "Image message";
-      media.loading = "lazy";
-      bubble.appendChild(media);
+    if ((m.messageType === MSG.IMAGE || m.messageType === MSG.GIF) && m.mediaUrl) {
+      const img = document.createElement("img");
+      img.className = "message-media";
+      img.src = m.mediaUrl;
+      img.alt = m.messageType === MSG.GIF ? "GIF message" : "Image message";
+      img.loading = "lazy";
+      bubble.appendChild(img);
     }
-
-    if (message.messageType === MESSAGE_TYPES.DELETED) {
-      const deleted = document.createElement("p");
-      deleted.className = "message-deleted";
-      deleted.textContent = "This message was deleted.";
-      bubble.appendChild(deleted);
-    } else {
-      const text = String(message.message || "");
-      if (text.trim()) {
-        const textEl = document.createElement("p");
-        textEl.className = "message-text";
-        appendFormattedMessage(textEl, text);
-        bubble.appendChild(textEl);
-      }
+    if (m.messageType === MSG.DELETED) {
+      const p = document.createElement("p");
+      p.className = "message-deleted";
+      p.textContent = "This message was deleted.";
+      bubble.appendChild(p);
+    } else if (String(m.message || "").trim()) {
+      bubble.appendChild(htmlWithLinks(m.message));
     }
-
     row.appendChild(bubble);
 
     const meta = document.createElement("footer");
     meta.className = "message-meta";
+    const tm = document.createElement("span");
+    tm.textContent = t(m.createdAt);
+    meta.appendChild(tm);
 
-    const time = document.createElement("span");
-    time.textContent = formatTime(message.createdAt);
-    meta.appendChild(time);
-
-    if (isSelf) {
-      const status = document.createElement("span");
-      status.dataset.messageStatus = "1";
-      if (message.messageType === MESSAGE_TYPES.DELETED) {
-        status.textContent = "";
-      } else {
-        status.textContent = state.messageStatusById.get(message.id) || message.status || "sent";
+    if (self) {
+      const st = document.createElement("span");
+      st.dataset.messageStatus = "1";
+      st.textContent = m.messageType === MSG.DELETED ? "" : state.messageStatus.get(m.id) || m.status || "sent";
+      meta.appendChild(st);
+      if (m.messageType !== MSG.DELETED) {
+        const del = document.createElement("button");
+        del.type = "button";
+        del.className = "delete-message-btn";
+        del.textContent = "Delete";
+        del.addEventListener("click", () => deleteMessage(m.id));
+        meta.appendChild(del);
       }
-      meta.appendChild(status);
     }
-
-    if (isSelf && message.messageType !== MESSAGE_TYPES.DELETED) {
-      const deleteBtn = document.createElement("button");
-      deleteBtn.type = "button";
-      deleteBtn.className = "delete-message-btn";
-      deleteBtn.textContent = "Delete";
-      deleteBtn.addEventListener("click", () => {
-        deleteMessageById(message.id);
-      });
-      meta.appendChild(deleteBtn);
-    }
-
     row.appendChild(meta);
     return row;
   }
 
-  function upsertMessage(message, options) {
-    const updateOptions = options || {};
-    if (!message || !message.id) {
-      return;
-    }
-
-    if (message.status) {
-      state.messageStatusById.set(message.id, message.status);
-    }
-    if (message.messageType === MESSAGE_TYPES.DELETED) {
-      state.messageStatusById.delete(message.id);
-    }
-
-    const shouldScroll =
-      updateOptions.forceScroll ||
-      isNearBottom() ||
-      message.senderId === currentUser.id;
-
-    const existing = state.messageElementsById.get(message.id);
-    const node = createMessageNode(message);
-
-    if (existing) {
-      existing.replaceWith(node);
-    } else {
-      messagesContainer.appendChild(node);
-    }
-    state.messageElementsById.set(message.id, node);
-
-    if (shouldScroll) {
-      scrollToBottom(true);
-    }
+  function upsertMessage(m, force) {
+    if (!m || !m.id) return;
+    if (m.status) state.messageStatus.set(m.id, m.status);
+    if (m.messageType === MSG.DELETED) state.messageStatus.delete(m.id);
+    const keepBottom = force || nearBottom() || m.senderId === currentUser.id;
+    const old = state.messageNodes.get(m.id);
+    const node = messageNode(m);
+    if (old) old.replaceWith(node);
+    else els.messagesContainer.appendChild(node);
+    state.messageNodes.set(m.id, node);
+    if (keepBottom) scrollBottom(true);
   }
 
-  function updateMessageStatus(messageId, status) {
-    if (!messageId || !status) {
-      return;
-    }
-
-    state.messageStatusById.set(messageId, status);
-    const existingNode = state.messageElementsById.get(messageId);
-    if (!existingNode) {
-      return;
-    }
-
-    const statusNode = existingNode.querySelector("[data-message-status]");
-    if (statusNode) {
-      statusNode.textContent = status;
-    }
+  function updateStatus(id, status) {
+    if (!id || !status) return;
+    state.messageStatus.set(id, status);
+    const node = state.messageNodes.get(id);
+    if (!node) return;
+    const st = node.querySelector("[data-message-status]");
+    if (st) st.textContent = status;
   }
 
   async function loadConversations() {
     try {
-      const response = await window.Api.fetchConversations(currentUser.id);
-      const conversations = response.conversations || [];
-
+      const { conversations = [] } = await window.Api.fetchConversations(currentUser.id);
       state.userMap.clear();
-      state.conversations = conversations.map((conversation) => {
-        const normalized = {
-          userId: conversation.userId,
-          username: conversation.username,
-          lastMessage: conversation.lastMessage || null,
+      state.conversations = conversations.map((c) => {
+        const x = {
+          userId: c.userId,
+          username: c.username,
+          avatarUrl: norm(c.avatarUrl),
+          lastMessage: c.lastMessage || null,
         };
-        state.userMap.set(normalized.userId, {
-          id: normalized.userId,
-          username: normalized.username,
-        });
-        return normalized;
+        state.userMap.set(x.userId, { username: x.username, avatarUrl: x.avatarUrl });
+        return x;
       });
-
       sortConversations();
       renderConversations();
 
-      if (state.conversations.length === 0) {
-        setActiveConversationHeader();
-        clearMessagesView();
+      if (!state.conversations.length) {
+        state.selectedUserId = null;
+        state.selectedUsername = "";
+        state.selectedAvatarUrl = null;
+        setHeader();
+        state.messageNodes.clear();
+        els.messagesContainer.innerHTML = "";
         setStatus("No users available yet.", false);
         return;
       }
 
-      const hasSelected = state.conversations.some(
-        (conversation) => conversation.userId === state.selectedUserId
-      );
-
-      if (!hasSelected) {
+      if (!state.conversations.some((c) => c.userId === state.selectedUserId)) {
         await selectConversation(state.conversations[0].userId);
       } else {
+        const c = state.conversations.find((it) => it.userId === state.selectedUserId);
+        state.selectedUsername = c.username;
+        state.selectedAvatarUrl = c.avatarUrl;
+        setHeader();
         renderConversations();
       }
-    } catch (error) {
-      setStatus(error.message, true);
+    } catch (e) {
+      setStatus(e.message, true);
     }
   }
 
-  async function loadMessagesForSelectedConversation() {
-    if (!state.selectedUserId) {
-      return;
-    }
-
+  async function loadMessages() {
+    if (!state.selectedUserId) return;
     try {
-      const response = await window.Api.fetchMessages(state.selectedUserId, currentUser.id);
-      const messages = response.messages || [];
-
-      clearMessagesView();
-      const fragment = document.createDocumentFragment();
-
-      messages.forEach((message) => {
-        if (message.status) {
-          state.messageStatusById.set(message.id, message.status);
-        }
-        const node = createMessageNode(message);
-        state.messageElementsById.set(message.id, node);
-        fragment.appendChild(node);
+      const { messages = [] } = await window.Api.fetchMessages(state.selectedUserId, currentUser.id);
+      state.messageNodes.clear();
+      els.messagesContainer.innerHTML = "";
+      const f = document.createDocumentFragment();
+      messages.forEach((m) => {
+        if (m.status) state.messageStatus.set(m.id, m.status);
+        const n = messageNode(m);
+        state.messageNodes.set(m.id, n);
+        f.appendChild(n);
       });
-
-      messagesContainer.appendChild(fragment);
-      scrollToBottom(true);
-    } catch (error) {
-      setStatus(error.message, true);
+      els.messagesContainer.appendChild(f);
+      scrollBottom(true);
+    } catch (e) {
+      setStatus(e.message, true);
     }
   }
 
   async function selectConversation(userId) {
-    const conversation = state.conversations.find((item) => item.userId === userId);
-    if (!conversation) {
-      return;
-    }
-
-    if (state.selectedUserId && state.selectedUserId !== userId) {
-      emitStopTyping();
-    }
-
+    const c = state.conversations.find((it) => it.userId === userId);
+    if (!c) return;
+    if (state.selectedUserId && state.selectedUserId !== userId) stopTyping();
     state.selectedUserId = userId;
-    state.selectedUsername = conversation.username;
-    state.unreadUserIds.delete(userId);
-    state.typingUserIds.delete(userId);
-    setActiveConversationHeader();
+    state.selectedUsername = c.username;
+    state.selectedAvatarUrl = c.avatarUrl;
+    state.unread.delete(userId);
+    state.typingUsers.delete(userId);
+    setHeader();
     renderConversations();
-    await loadMessagesForSelectedConversation();
-    messageInput.focus();
+    await loadMessages();
+    els.messageInput.focus();
   }
 
-  function isForOpenConversation(message) {
-    if (!state.selectedUserId) {
-      return false;
+  function updateConvFromMessage(m) {
+    const uid = m.senderId === currentUser.id ? m.receiverId : m.senderId;
+    let c = state.conversations.find((x) => x.userId === uid);
+    if (!c) {
+      const ref = state.userMap.get(uid) || {};
+      c = { userId: uid, username: ref.username || `User ${uid}`, avatarUrl: ref.avatarUrl || null, lastMessage: null };
+      state.conversations.push(c);
     }
-    return (
-      (message.senderId === currentUser.id && message.receiverId === state.selectedUserId) ||
-      (message.senderId === state.selectedUserId && message.receiverId === currentUser.id)
-    );
+    c.lastMessage = { id: m.id, senderId: m.senderId, messageType: m.messageType, preview: preview(m.messageType, m.message), createdAt: m.createdAt };
+    sortConversations();
+    renderConversations();
   }
 
-  function handleIncomingMessage(message) {
-    if (!message || !message.id) {
-      return;
-    }
-
-    updateConversationWithMessage(message);
-
-    if (isForOpenConversation(message)) {
-      upsertMessage(message, { forceScroll: false });
-      if (message.senderId === state.selectedUserId) {
-        state.typingUserIds.delete(state.selectedUserId);
-        updateTypingIndicator();
-      }
-      return;
-    }
-
-    if (message.senderId !== currentUser.id) {
-      state.unreadUserIds.add(message.senderId);
-      renderConversations();
-    }
-  }
-
-  function handleDeletedMessage(message) {
-    if (!message || !message.id) {
-      return;
-    }
-
-    updateConversationWithMessage(message);
-    if (isForOpenConversation(message)) {
-      upsertMessage(message, { forceScroll: false });
-    }
-  }
-
-  function sendWithSocket(eventName, payload) {
-    return new Promise((resolve, reject) => {
-      socket.emit(eventName, payload, (ack) => {
-        if (ack && ack.ok) {
-          resolve(ack.message);
-          return;
-        }
-        reject(new Error((ack && ack.error) || "Operation failed."));
-      });
-    });
-  }
-
-  async function sendMessage(payload) {
+  async function sendMessage(body) {
     if (!state.selectedUserId) {
       setStatus("Choose a conversation first.", true);
       return null;
     }
-
-    const body = {
+    const payload = {
       senderId: currentUser.id,
       receiverId: state.selectedUserId,
-      message: payload.message || "",
-      messageType: payload.messageType || MESSAGE_TYPES.TEXT,
-      mediaUrl: payload.mediaUrl || null,
+      message: body.message || "",
+      messageType: body.messageType || MSG.TEXT,
+      mediaUrl: body.mediaUrl || null,
     };
-
     try {
-      let sentMessage;
-      if (socket.connected) {
-        sentMessage = await sendWithSocket("send_message", body);
-      } else {
-        const response = await window.Api.sendMessage(body);
-        sentMessage = response.data;
-      }
-
-      upsertMessage(sentMessage, { forceScroll: true });
-      updateConversationWithMessage(sentMessage);
+      const sent = socket.connected
+        ? await emitAck("send_message", payload)
+        : (await window.Api.sendMessage(payload)).data;
+      upsertMessage(sent, true);
+      updateConvFromMessage(sent);
       setStatus("", false);
-      return sentMessage;
-    } catch (error) {
-      setStatus(error.message, true);
+      return sent;
+    } catch (e) {
+      setStatus(e.message, true);
       return null;
     }
   }
 
-  async function deleteMessageById(messageId) {
-    if (!messageId) {
-      return;
-    }
-
-    const confirmed = window.confirm("Delete this message?");
-    if (!confirmed) {
-      return;
-    }
-
+  async function deleteMessage(id) {
+    if (!id || !window.confirm("Delete this message?")) return;
     try {
-      let deletedMessage;
-      if (socket.connected) {
-        deletedMessage = await sendWithSocket("delete_message", {
-          messageId,
-          userId: currentUser.id,
-        });
-      } else {
-        const response = await window.Api.deleteMessage(messageId, currentUser.id);
-        deletedMessage = response.data;
-      }
-
-      handleDeletedMessage(deletedMessage);
-    } catch (error) {
-      setStatus(error.message, true);
+      const msg = socket.connected
+        ? await emitAck("delete_message", { messageId: id, userId: currentUser.id })
+        : (await window.Api.deleteMessage(id, currentUser.id)).data;
+      updateConvFromMessage(msg);
+      if (isOpenConv(msg)) upsertMessage(msg, false);
+    } catch (e) {
+      setStatus(e.message, true);
     }
+  }
+
+  function emitAck(eventName, payload) {
+    return new Promise((resolve, reject) => {
+      socket.emit(eventName, payload, (ack) => {
+        if (ack && ack.ok) resolve(ack.message);
+        else reject(new Error((ack && ack.error) || "Operation failed."));
+      });
+    });
   }
 
   function emitTyping() {
-    if (!socket.connected || !state.selectedUserId) {
-      return;
-    }
-
-    socket.emit("typing", {
-      senderId: currentUser.id,
-      receiverId: state.selectedUserId,
-    });
-    state.isTypingEmitted = true;
+    if (!socket.connected || !state.selectedUserId || state.typingSent) return;
+    socket.emit("typing", { senderId: currentUser.id, receiverId: state.selectedUserId });
+    state.typingSent = true;
   }
 
-  function emitStopTyping() {
-    if (!state.isTypingEmitted || !socket.connected || !state.selectedUserId) {
-      return;
-    }
-
-    socket.emit("stop_typing", {
-      senderId: currentUser.id,
-      receiverId: state.selectedUserId,
-    });
-    state.isTypingEmitted = false;
+  function stopTyping() {
+    if (!socket.connected || !state.selectedUserId || !state.typingSent) return;
+    socket.emit("stop_typing", { senderId: currentUser.id, receiverId: state.selectedUserId });
+    state.typingSent = false;
   }
 
   function resetTypingTimer() {
-    if (state.typingTimeoutId) {
-      clearTimeout(state.typingTimeoutId);
-    }
-
-    state.typingTimeoutId = setTimeout(() => {
-      emitStopTyping();
-    }, TYPING_DEBOUNCE_MS);
+    if (state.typingTimer) clearTimeout(state.typingTimer);
+    state.typingTimer = setTimeout(() => stopTyping(), TYPING_MS);
   }
 
-  function autoResizeComposer() {
-    messageInput.style.height = "auto";
-    const nextHeight = Math.min(messageInput.scrollHeight, 130);
-    messageInput.style.height = `${nextHeight}px`;
+  function resizeInput() {
+    els.messageInput.style.height = "auto";
+    els.messageInput.style.height = `${Math.min(els.messageInput.scrollHeight, 130)}px`;
   }
 
-  function clearComposer() {
-    messageInput.value = "";
-    autoResizeComposer();
+  function clearInput() {
+    els.messageInput.value = "";
+    resizeInput();
   }
 
-  async function sendTextMessage() {
-    const text = messageInput.value;
-    if (!text.trim()) {
-      return;
-    }
-    const sentMessage = await sendMessage({
-      messageType: MESSAGE_TYPES.TEXT,
-      message: text,
-    });
-
-    if (sentMessage) {
-      clearComposer();
-      emitStopTyping();
+  async function sendText() {
+    const txt = els.messageInput.value;
+    if (!txt.trim()) return;
+    const sent = await sendMessage({ messageType: MSG.TEXT, message: txt });
+    if (sent) {
+      clearInput();
+      stopTyping();
     }
   }
 
-  function readFileAsDataUrl(file) {
+  function readDataUrl(file) {
     return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result);
-      reader.onerror = () => reject(new Error("Failed to read the selected image."));
-      reader.readAsDataURL(file);
+      const r = new FileReader();
+      r.onload = () => resolve(r.result);
+      r.onerror = () => reject(new Error("Failed to read selected image."));
+      r.readAsDataURL(file);
     });
   }
 
-  async function handleImageUpload(file) {
-    if (!file) {
-      return;
-    }
-
-    if (file.size > MAX_IMAGE_SIZE_BYTES) {
+  async function sendImage(file) {
+    if (!file) return;
+    if (file.size > MAX_IMG) {
       setStatus("Image is too large. Please use a file under 2 MB.", true);
       return;
     }
-
     try {
       setStatus("Uploading image...", false);
-      const dataUrl = await readFileAsDataUrl(file);
-      const caption = messageInput.value;
-      const sentMessage = await sendMessage({
-        messageType: MESSAGE_TYPES.IMAGE,
-        mediaUrl: dataUrl,
-        message: caption,
+      const sent = await sendMessage({
+        messageType: MSG.IMAGE,
+        mediaUrl: await readDataUrl(file),
+        message: els.messageInput.value,
       });
-
-      if (sentMessage) {
-        clearComposer();
-        setStatus("", false);
-      }
-    } catch (error) {
-      setStatus(error.message, true);
+      if (sent) clearInput();
+    } catch (e) {
+      setStatus(e.message, true);
     } finally {
-      imageInput.value = "";
+      els.imageInput.value = "";
     }
   }
 
-  function renderGifResults(gifs) {
-    gifResults.innerHTML = "";
-    if (!gifs || gifs.length === 0) {
-      const empty = document.createElement("p");
-      empty.className = "status";
-      empty.textContent = "No GIFs found.";
-      gifResults.appendChild(empty);
+  async function updateAvatar(avatarUrl) {
+    try {
+      const res = await window.Api.updateAvatar(currentUser.id, avatarUrl);
+      currentUser.avatarUrl = norm(res.user && res.user.avatarUrl);
+      window.AuthStore.saveUser(currentUser);
+      renderCurrentUser();
+      setStatus("Profile picture updated.", false);
+    } catch (e) {
+      setStatus(e.message, true);
+    }
+  }
+
+  async function uploadAvatar(file) {
+    if (!file) return;
+    if (file.size > MAX_IMG) {
+      setStatus("Avatar image is too large. Use a file under 2 MB.", true);
       return;
     }
+    try {
+      setStatus("Uploading profile picture...", false);
+      await updateAvatar(await readDataUrl(file));
+    } catch (e) {
+      setStatus(e.message, true);
+    } finally {
+      els.profileAvatarInput.value = "";
+    }
+  }
 
+  function renderGifs(gifs) {
+    els.gifResults.innerHTML = "";
+    if (!gifs || !gifs.length) {
+      const p = document.createElement("p");
+      p.className = "status";
+      p.textContent = "No GIFs found.";
+      els.gifResults.appendChild(p);
+      return;
+    }
     gifs.forEach((gif) => {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "gif-card";
-      button.title = gif.title || "GIF";
-
-      const image = document.createElement("img");
-      image.src = gif.previewUrl || gif.mediaUrl;
-      image.alt = gif.title || "GIF";
-      image.loading = "lazy";
-
-      button.appendChild(image);
-      button.addEventListener("click", async () => {
-        const caption = messageInput.value;
-        const sentMessage = await sendMessage({
-          messageType: MESSAGE_TYPES.GIF,
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "gif-card";
+      b.title = gif.title || "GIF";
+      const img = document.createElement("img");
+      img.src = gif.previewUrl || gif.mediaUrl;
+      img.alt = gif.title || "GIF";
+      img.loading = "lazy";
+      b.appendChild(img);
+      b.addEventListener("click", async () => {
+        const sent = await sendMessage({
+          messageType: MSG.GIF,
           mediaUrl: gif.mediaUrl,
-          message: caption,
+          message: els.messageInput.value,
         });
-
-        if (sentMessage) {
-          clearComposer();
-          toggleGifPicker(false);
+        if (sent) {
+          clearInput();
+          toggleGif(false);
         }
       });
-
-      gifResults.appendChild(button);
+      els.gifResults.appendChild(b);
     });
   }
 
-  async function searchGifs(query) {
-    if (!query.trim()) {
-      renderGifResults([]);
+  async function searchGifs(q) {
+    if (!q.trim()) {
+      renderGifs([]);
       return;
     }
-
     try {
-      const response = await window.Api.searchGifs(query, 18);
-      renderGifResults(response.gifs || []);
-    } catch (error) {
-      setStatus(error.message, true);
+      renderGifs((await window.Api.searchGifs(q, 18)).gifs || []);
+    } catch (e) {
+      setStatus(e.message, true);
     }
   }
 
-  function toggleGifPicker(show) {
-    const shouldShow =
-      typeof show === "boolean" ? show : gifPicker.classList.contains("hidden");
-
-    gifPicker.classList.toggle("hidden", !shouldShow);
-    if (!shouldShow) {
-      return;
-    }
-
-    emojiPanel.classList.add("hidden");
-    gifSearchInput.focus();
-    if (!gifResults.children.length) {
-      gifSearchInput.value = DEFAULT_GIF_SEARCH;
-      searchGifs(DEFAULT_GIF_SEARCH);
+  function toggleGif(show) {
+    const open = typeof show === "boolean" ? show : els.gifPicker.classList.contains("hidden");
+    els.gifPicker.classList.toggle("hidden", !open);
+    if (!open) return;
+    els.emojiPanel.classList.add("hidden");
+    els.gifSearchInput.focus();
+    if (!els.gifResults.children.length) {
+      els.gifSearchInput.value = GIF_DEFAULT;
+      searchGifs(GIF_DEFAULT);
     }
   }
 
   function buildEmojiPanel() {
-    emojiPanel.innerHTML = "";
-    EMOJIS.forEach((emoji) => {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "emoji-btn";
-      button.textContent = emoji;
-      button.addEventListener("click", () => {
-        messageInput.value += emoji;
-        autoResizeComposer();
-        messageInput.focus();
+    els.emojiPanel.innerHTML = "";
+    EMOJIS.forEach((e) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "emoji-btn";
+      b.textContent = e;
+      b.addEventListener("click", () => {
+        els.messageInput.value += e;
+        resizeInput();
+        els.messageInput.focus();
       });
-      emojiPanel.appendChild(button);
+      els.emojiPanel.appendChild(b);
     });
   }
 
-  function toggleEmojiPanel() {
-    const shouldOpen = emojiPanel.classList.contains("hidden");
-    emojiPanel.classList.toggle("hidden", !shouldOpen);
-    if (shouldOpen) {
-      gifPicker.classList.add("hidden");
+  function toggleEmoji() {
+    const open = els.emojiPanel.classList.contains("hidden");
+    els.emojiPanel.classList.toggle("hidden", !open);
+    if (open) els.gifPicker.classList.add("hidden");
+  }
+
+  function syncUserAvatar(uid, avatarUrl) {
+    const av = norm(avatarUrl);
+    if (state.userMap.has(uid)) state.userMap.get(uid).avatarUrl = av;
+    const c = state.conversations.find((x) => x.userId === uid);
+    if (c) c.avatarUrl = av;
+    if (state.selectedUserId === uid) {
+      state.selectedAvatarUrl = av;
+      setHeader();
     }
   }
 
-  function wireSocketEvents() {
+  function bindSocket() {
     socket.on("connect", () => {
-      updateSocketStatus();
+      els.socketStatus.textContent = "Online";
+      els.socketStatus.classList.add("online");
       socket.emit("register", { userId: currentUser.id });
     });
-
     socket.on("disconnect", () => {
-      updateSocketStatus();
+      els.socketStatus.textContent = "Offline";
+      els.socketStatus.classList.remove("online");
     });
-
-    socket.on("receive_message", (message) => {
-      handleIncomingMessage(message);
-    });
-
-    socket.on("message_deleted", (message) => {
-      handleDeletedMessage(message);
-    });
-
-    socket.on("message_status", (payload) => {
-      if (!payload || !payload.messageId) {
-        return;
+    socket.on("receive_message", (m) => {
+      if (!m || !m.id) return;
+      updateConvFromMessage(m);
+      if (isOpenConv(m)) {
+        upsertMessage(m, false);
+        if (m.senderId === state.selectedUserId) {
+          state.typingUsers.delete(state.selectedUserId);
+          setHeader();
+        }
+      } else if (m.senderId !== currentUser.id) {
+        state.unread.add(m.senderId);
+        renderConversations();
       }
-      updateMessageStatus(payload.messageId, payload.status || "delivered");
     });
-
-    socket.on("typing", (payload) => {
-      const senderId = Number(payload && payload.senderId);
-      if (!senderId || senderId === currentUser.id) {
-        return;
-      }
-      state.typingUserIds.add(senderId);
-      updateTypingIndicator();
+    socket.on("message_deleted", (m) => {
+      if (!m || !m.id) return;
+      updateConvFromMessage(m);
+      if (isOpenConv(m)) upsertMessage(m, false);
+    });
+    socket.on("message_status", (p) => {
+      if (p && p.messageId) updateStatus(p.messageId, p.status || "delivered");
+    });
+    socket.on("typing", (p) => {
+      const sid = Number(p && p.senderId);
+      if (!sid || sid === currentUser.id) return;
+      state.typingUsers.add(sid);
+      setHeader();
       renderConversations();
     });
-
-    socket.on("stop_typing", (payload) => {
-      const senderId = Number(payload && payload.senderId);
-      if (!senderId) {
-        return;
+    socket.on("stop_typing", (p) => {
+      const sid = Number(p && p.senderId);
+      if (!sid) return;
+      state.typingUsers.delete(sid);
+      setHeader();
+      renderConversations();
+    });
+    socket.on("user_profile_updated", (p) => {
+      const uid = Number(p && p.userId);
+      if (!uid) return;
+      const av = norm(p.avatarUrl);
+      if (uid === currentUser.id) {
+        currentUser.avatarUrl = av;
+        window.AuthStore.saveUser(currentUser);
+        renderCurrentUser();
       }
-      state.typingUserIds.delete(senderId);
-      updateTypingIndicator();
+      syncUserAvatar(uid, av);
       renderConversations();
     });
   }
 
-  function wireUiEvents() {
-    themeToggleBtn.addEventListener("click", toggleTheme);
-
-    refreshUsersBtn.addEventListener("click", () => {
-      loadConversations();
+  function bindUi() {
+    els.navChatsBtn.addEventListener("click", () => {
+      setSettings(false);
+      els.messageInput.focus();
     });
-
-    logoutBtn.addEventListener("click", () => {
-      emitStopTyping();
+    els.navProfileBtn.addEventListener("click", () => setSettings(true));
+    els.navSettingsBtn.addEventListener("click", () => setSettings(true));
+    els.closeSettingsBtn.addEventListener("click", () => setSettings(false));
+    els.themeToggleBtn.addEventListener("click", () => {
+      const next = document.body.classList.contains("theme-dark") ? "light" : "dark";
+      localStorage.setItem(THEME_KEY, next);
+      applyTheme(next);
+    });
+    els.refreshUsersBtn.addEventListener("click", () => loadConversations());
+    els.navLogoutBtn.addEventListener("click", () => {
+      stopTyping();
       window.AuthStore.clearUser();
       window.location.replace("/login.html");
     });
-
-    userSearchInput.addEventListener("input", () => {
-      renderConversations();
+    els.changeAvatarBtn.addEventListener("click", () => els.profileAvatarInput.click());
+    els.removeAvatarBtn.addEventListener("click", () => updateAvatar(null));
+    els.profileAvatarInput.addEventListener("change", async () => {
+      await uploadAvatar(els.profileAvatarInput.files && els.profileAvatarInput.files[0]);
     });
+    els.userSearchInput.addEventListener("input", renderConversations);
 
-    messageInput.addEventListener("input", () => {
-      autoResizeComposer();
-      if (!state.selectedUserId) {
+    els.messageInput.addEventListener("input", () => {
+      resizeInput();
+      if (!state.selectedUserId) return;
+      if (!els.messageInput.value.trim()) {
+        stopTyping();
         return;
       }
-
-      if (!messageInput.value.trim()) {
-        emitStopTyping();
-        return;
-      }
-
-      if (!state.isTypingEmitted) {
-        emitTyping();
-      }
+      emitTyping();
       resetTypingTimer();
     });
-
-    messageInput.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" && !event.shiftKey) {
-        event.preventDefault();
-        messageForm.requestSubmit();
+    els.messageInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        els.messageForm.requestSubmit();
       }
     });
-
-    messageInput.addEventListener("blur", () => {
-      emitStopTyping();
+    els.messageInput.addEventListener("blur", stopTyping);
+    els.messageForm.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      await sendText();
     });
 
-    messageForm.addEventListener("submit", async (event) => {
-      event.preventDefault();
-      await sendTextMessage();
+    els.emojiToggleBtn.addEventListener("click", toggleEmoji);
+    els.imageUploadBtn.addEventListener("click", () => els.imageInput.click());
+    els.imageInput.addEventListener("change", async () => {
+      await sendImage(els.imageInput.files && els.imageInput.files[0]);
     });
-
-    emojiToggleBtn.addEventListener("click", () => {
-      toggleEmojiPanel();
-    });
-
-    imageUploadBtn.addEventListener("click", () => {
-      imageInput.click();
-    });
-
-    imageInput.addEventListener("change", async () => {
-      const file = imageInput.files && imageInput.files[0];
-      await handleImageUpload(file);
-    });
-
-    gifToggleBtn.addEventListener("click", () => {
-      toggleGifPicker();
-    });
-
-    manualGifBtn.addEventListener("click", async () => {
-      const pastedUrl = window.prompt("Paste a direct GIF URL:");
-      if (!pastedUrl) {
-        return;
-      }
-
-      const trimmedUrl = pastedUrl.trim();
-      const isHttpUrl = /^https?:\/\//i.test(trimmedUrl);
-      if (!isHttpUrl) {
+    els.gifToggleBtn.addEventListener("click", () => toggleGif());
+    els.manualGifBtn.addEventListener("click", async () => {
+      const raw = window.prompt("Paste a direct GIF URL:");
+      if (!raw) return;
+      const url = raw.trim();
+      if (!/^https?:\/\//i.test(url)) {
         setStatus("Please provide a valid http(s) GIF URL.", true);
         return;
       }
-
-      const caption = messageInput.value;
-      const sentMessage = await sendMessage({
-        messageType: MESSAGE_TYPES.GIF,
-        mediaUrl: trimmedUrl,
-        message: caption,
-      });
-
-      if (sentMessage) {
-        clearComposer();
-        toggleGifPicker(false);
+      const sent = await sendMessage({ messageType: MSG.GIF, mediaUrl: url, message: els.messageInput.value });
+      if (sent) {
+        clearInput();
+        toggleGif(false);
       }
     });
-
-    closeGifBtn.addEventListener("click", () => {
-      toggleGifPicker(false);
+    els.closeGifBtn.addEventListener("click", () => toggleGif(false));
+    els.gifSearchInput.addEventListener("input", () => {
+      if (state.gifTimer) clearTimeout(state.gifTimer);
+      const q = els.gifSearchInput.value;
+      state.gifTimer = setTimeout(() => searchGifs(q), 300);
     });
-
-    gifSearchInput.addEventListener("input", () => {
-      if (state.gifSearchTimeoutId) {
-        clearTimeout(state.gifSearchTimeoutId);
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        setSettings(false);
+        toggleGif(false);
+        els.emojiPanel.classList.add("hidden");
       }
-      const term = gifSearchInput.value;
-      state.gifSearchTimeoutId = setTimeout(() => {
-        searchGifs(term);
-      }, 300);
     });
   }
 
   async function init() {
-    initTheme();
+    applyTheme(localStorage.getItem(THEME_KEY) || "light");
+    renderCurrentUser();
     buildEmojiPanel();
-    setActiveConversationHeader();
+    setHeader();
     updateSocketStatus();
-    wireSocketEvents();
-    wireUiEvents();
+    bindSocket();
+    bindUi();
     await loadConversations();
   }
 

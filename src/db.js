@@ -86,6 +86,7 @@ async function createTables() {
       username VARCHAR(255) NOT NULL UNIQUE,
       password_hash VARCHAR(128) NOT NULL,
       salt VARCHAR(64) NOT NULL,
+      avatar_url LONGTEXT NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
   `;
@@ -110,6 +111,7 @@ async function createTables() {
 
   await pool.query(usersTableSql);
   await pool.query(messagesTableSql);
+  await ensureUserColumns();
   await ensureMessageColumns();
 }
 
@@ -153,6 +155,14 @@ async function ensureMessageColumns() {
     "messages",
     "deleted_at",
     "deleted_at TIMESTAMP NULL DEFAULT NULL AFTER media_url"
+  );
+}
+
+async function ensureUserColumns() {
+  await ensureColumn(
+    "users",
+    "avatar_url",
+    "avatar_url LONGTEXT NULL AFTER salt"
   );
 }
 

@@ -169,7 +169,7 @@ function mapMessageRow(row, currentUserId) {
 async function findUserById(userId) {
   const db = getDb();
   const [rows] = await db.execute(
-    "SELECT id, username FROM users WHERE id = ? LIMIT 1",
+    "SELECT id, username, avatar_url FROM users WHERE id = ? LIMIT 1",
     [userId]
   );
   return rows[0] || null;
@@ -325,6 +325,7 @@ app.post("/signup", async (req, res) => {
       user: {
         id: result.insertId,
         username,
+        avatarUrl: null,
       },
     });
   } catch (error) {
@@ -349,7 +350,7 @@ app.post("/login", async (req, res) => {
     const db = getDb();
     const [rows] = await db.execute(
       `
-      SELECT id, username, password_hash, salt
+      SELECT id, username, password_hash, salt, avatar_url
       FROM users
       WHERE username = ?
       LIMIT 1
@@ -373,6 +374,7 @@ app.post("/login", async (req, res) => {
       user: {
         id: user.id,
         username: user.username,
+        avatarUrl: user.avatar_url || null,
       },
     });
   } catch (error) {
@@ -399,7 +401,7 @@ app.get("/users", async (req, res) => {
       params.push(`%${searchTerm}%`);
     }
 
-    let query = "SELECT id, username, created_at FROM users";
+    let query = "SELECT id, username, avatar_url, created_at FROM users";
     if (conditions.length > 0) {
       query += ` WHERE ${conditions.join(" AND ")}`;
     }
@@ -409,6 +411,7 @@ app.get("/users", async (req, res) => {
     const users = rows.map((row) => ({
       id: row.id,
       username: row.username,
+      avatarUrl: row.avatar_url || null,
       createdAt: toIsoString(row.created_at),
     }));
 
@@ -416,6 +419,62 @@ app.get("/users", async (req, res) => {
   } catch (error) {
     console.error("[users] failed:", error);
     return res.status(500).json({ error: "Failed to load users." });
+  }
+});
+
+app.post("/profile/avatar", async (req, res) => {
+  try {
+    const userId = toPositiveInt(req.body.userId);
+    let avatarUrl =
+      req.body.avatarUrl === undefined || req.body.avatarUrl === null
+        ? null
+        : String(req.body.avatarUrl).trim();
+
+    if (!userId) {
+      return res.status(400).json({ error: "Valid userId is required." });
+    }
+
+    if (avatarUrl === "") {
+      avatarUrl = null;
+    }
+
+    if (avatarUrl && avatarUrl.length > MAX_MEDIA_URL_LENGTH) {
+      return res.status(400).json({ error: "Avatar image is too large." });
+    }
+
+    const user = await findUserById(userId);
+    if (!user) {
+      return res.status(404).json({ error: "User not found." });
+    }
+
+    const db = getDb();
+    await db.execute(
+      `
+      UPDATE users
+      SET avatar_url = ?
+      WHERE id = ?
+      `,
+      [avatarUrl, userId]
+    );
+
+    const payload = {
+      userId,
+      avatarUrl: avatarUrl || null,
+    };
+
+    io.emit("user_profile_updated", payload);
+
+    return res.json({
+      message: "Profile picture updated.",
+      user: {
+        id: userId,
+        username: user.username,
+        avatarUrl: avatarUrl || null,
+      },
+    });
+  } catch (error) {
+    console.error("[profile/avatar] failed:", error);
+    return res.status(500).json({ error: "Failed to update profile picture." });
   }
 });
 
@@ -440,6 +499,7 @@ app.get("/conversations", async (req, res) => {
       SELECT
         u.id AS user_id,
         u.username,
+        u.avatar_url,
         m.id AS message_id,
         m.sender_id,
         m.receiver_id,
@@ -500,6 +560,7 @@ app.get("/conversations", async (req, res) => {
       return {
         userId: row.user_id,
         username: row.username,
+        avatarUrl: row.avatar_url || null,
         lastMessage,
       };
     });

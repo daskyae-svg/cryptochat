@@ -62,6 +62,12 @@
         body: { messageId, userId },
       });
     },
+    updateAvatar(userId, avatarUrl) {
+      return request("/profile/avatar", {
+        method: "POST",
+        body: { userId, avatarUrl },
+      });
+    },
     searchGifs(query, limit) {
       const queryString = toQuery({ q: query, limit });
       return request(`/gifs/search?${queryString}`);
