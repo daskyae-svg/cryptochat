@@ -19,6 +19,9 @@ const {
 const SERVER_PORT = Number(process.env.PORT || process.env.SERVER_PORT || 3000);
 const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN || "*";
 const HOST = "0.0.0.0";
+const GIPHY_API_KEY = process.env.GIPHY_API_KEY || "";
+const MAX_MEDIA_URL_LENGTH = 2_500_000;
+const MAX_MESSAGE_LENGTH = 3000;
 
 const primaryClientDir = path.resolve(__dirname, "..", "server", "client");
 const fallbackClientDir = path.resolve(__dirname, "..", "client");
@@ -26,6 +29,21 @@ const clientDir = fs.existsSync(primaryClientDir)
   ? primaryClientDir
   : fallbackClientDir;
 const indexFilePath = path.join(clientDir, "index.html");
+
+const MESSAGE_TYPES = {
+  TEXT: "text",
+  IMAGE: "image",
+  GIF: "gif",
+  DELETED: "deleted",
+};
+
+const ALLOWED_OUTGOING_TYPES = new Set([MESSAGE_TYPES.TEXT, MESSAGE_TYPES.IMAGE, MESSAGE_TYPES.GIF]);
+const ALL_DB_TYPES = new Set([
+  MESSAGE_TYPES.TEXT,
+  MESSAGE_TYPES.IMAGE,
+  MESSAGE_TYPES.GIF,
+  MESSAGE_TYPES.DELETED,
+]);
 
 const app = express();
 const server = http.createServer(app);
@@ -46,7 +64,7 @@ app.use(
     origin: CLIENT_ORIGIN === "*" ? true : CLIENT_ORIGIN,
   })
 );
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: "4mb" }));
 app.use(express.static(clientDir));
 
 app.get("/health", (_req, res) => {
@@ -74,6 +92,80 @@ function toIsoString(value) {
   return date.toISOString();
 }
 
+function normalizeMessageType(rawType) {
+  const type = String(rawType || MESSAGE_TYPES.TEXT).toLowerCase().trim();
+  if (!ALL_DB_TYPES.has(type)) {
+    return MESSAGE_TYPES.TEXT;
+  }
+  return type;
+}
+
+function isUserOnline(userId) {
+  const sockets = onlineUsers.get(String(userId));
+  return Boolean(sockets && sockets.size > 0);
+}
+
+function createHttpError(status, message) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
+}
+
+function safeDecrypt(encryptedMessage, iv) {
+  try {
+    return decryptMessage(encryptedMessage, iv);
+  } catch (error) {
+    return "[Unable to decrypt message]";
+  }
+}
+
+function toPreviewText(message, maxLength = 45) {
+  const singleLine = String(message || "").replace(/\s+/g, " ").trim();
+  if (singleLine.length <= maxLength) {
+    return singleLine;
+  }
+  return `${singleLine.slice(0, maxLength - 1)}...`;
+}
+
+function messagePreviewFromType(messageType, messageText) {
+  if (messageType === MESSAGE_TYPES.DELETED) {
+    return "Message deleted";
+  }
+  if (messageType === MESSAGE_TYPES.IMAGE) {
+    return messageText ? `Photo: ${toPreviewText(messageText, 36)}` : "Photo";
+  }
+  if (messageType === MESSAGE_TYPES.GIF) {
+    return messageText ? `GIF: ${toPreviewText(messageText, 36)}` : "GIF";
+  }
+  return toPreviewText(messageText, 45);
+}
+
+function mapMessageRow(row, currentUserId) {
+  const messageType = normalizeMessageType(row.message_type);
+  const decryptedMessage =
+    messageType === MESSAGE_TYPES.DELETED
+      ? "This message was deleted."
+      : safeDecrypt(row.message_encrypted, row.iv);
+
+  const message = {
+    id: row.id,
+    senderId: row.sender_id,
+    receiverId: row.receiver_id,
+    messageType,
+    message: decryptedMessage,
+    mediaUrl: row.media_url || null,
+    createdAt: toIsoString(row.created_at),
+    deletedAt: row.deleted_at ? toIsoString(row.deleted_at) : null,
+    status: null,
+  };
+
+  if (currentUserId && row.sender_id === currentUserId && messageType !== MESSAGE_TYPES.DELETED) {
+    message.status = "sent";
+  }
+
+  return message;
+}
+
 async function findUserById(userId) {
   const db = getDb();
   const [rows] = await db.execute(
@@ -91,29 +183,95 @@ async function ensureUsersExist(senderId, receiverId) {
   return Boolean(sender && receiver);
 }
 
-async function persistEncryptedMessage(senderId, receiverId, plainTextMessage) {
+async function persistEncryptedMessage({
+  senderId,
+  receiverId,
+  messageText,
+  messageType,
+  mediaUrl,
+}) {
   const db = getDb();
-  const { encryptedMessage, iv } = encryptMessage(plainTextMessage);
+  const safeMessageText = String(messageText || "");
+  const safeMessageType = normalizeMessageType(messageType);
+  const { encryptedMessage, iv } = encryptMessage(safeMessageText);
 
   const [result] = await db.execute(
     `
-    INSERT INTO messages (sender_id, receiver_id, message_encrypted, iv)
-    VALUES (?, ?, ?, ?)
+    INSERT INTO messages (sender_id, receiver_id, message_type, message_encrypted, media_url, iv)
+    VALUES (?, ?, ?, ?, ?, ?)
     `,
-    [senderId, receiverId, encryptedMessage, iv]
+    [senderId, receiverId, safeMessageType, encryptedMessage, mediaUrl || null, iv]
   );
 
   const [rows] = await db.execute(
-    "SELECT id, created_at FROM messages WHERE id = ? LIMIT 1",
+    `
+    SELECT id, sender_id, receiver_id, message_type, message_encrypted, media_url, iv, created_at, deleted_at
+    FROM messages
+    WHERE id = ?
+    LIMIT 1
+    `,
     [result.insertId]
   );
 
+  return mapMessageRow(rows[0]);
+}
+
+async function markMessageDeleted(messageId, requesterId) {
+  const db = getDb();
+  const [rows] = await db.execute(
+    `
+    SELECT id, sender_id, receiver_id, created_at, message_type, deleted_at
+    FROM messages
+    WHERE id = ?
+    LIMIT 1
+    `,
+    [messageId]
+  );
+
+  const existingMessage = rows[0];
+  if (!existingMessage) {
+    throw createHttpError(404, "Message not found.");
+  }
+
+  if (existingMessage.sender_id !== requesterId) {
+    throw createHttpError(403, "You can only delete your own messages.");
+  }
+
+  if (normalizeMessageType(existingMessage.message_type) === MESSAGE_TYPES.DELETED) {
+    return {
+      id: existingMessage.id,
+      senderId: existingMessage.sender_id,
+      receiverId: existingMessage.receiver_id,
+      messageType: MESSAGE_TYPES.DELETED,
+      message: "This message was deleted.",
+      mediaUrl: null,
+      createdAt: toIsoString(existingMessage.created_at),
+      deletedAt: existingMessage.deleted_at
+        ? toIsoString(existingMessage.deleted_at)
+        : new Date().toISOString(),
+      status: "sent",
+    };
+  }
+
+  await db.execute(
+    `
+    UPDATE messages
+    SET message_type = ?, media_url = NULL, deleted_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+    `,
+    [MESSAGE_TYPES.DELETED, messageId]
+  );
+
   return {
-    id: result.insertId,
-    senderId,
-    receiverId,
-    message: plainTextMessage,
-    createdAt: rows[0] ? toIsoString(rows[0].created_at) : new Date().toISOString(),
+    id: existingMessage.id,
+    senderId: existingMessage.sender_id,
+    receiverId: existingMessage.receiver_id,
+    messageType: MESSAGE_TYPES.DELETED,
+    message: "This message was deleted.",
+    mediaUrl: null,
+    createdAt: toIsoString(existingMessage.created_at),
+    deletedAt: new Date().toISOString(),
+    status: "sent",
   };
 }
 
@@ -226,15 +384,25 @@ app.post("/login", async (req, res) => {
 app.get("/users", async (req, res) => {
   try {
     const excludeId = toPositiveInt(req.query.exclude);
+    const searchTerm = String(req.query.search || "").trim();
     const db = getDb();
-    let query = "SELECT id, username, created_at FROM users";
     const params = [];
+    const conditions = [];
 
     if (excludeId) {
-      query += " WHERE id <> ?";
+      conditions.push("id <> ?");
       params.push(excludeId);
     }
 
+    if (searchTerm) {
+      conditions.push("username LIKE ?");
+      params.push(`%${searchTerm}%`);
+    }
+
+    let query = "SELECT id, username, created_at FROM users";
+    if (conditions.length > 0) {
+      query += ` WHERE ${conditions.join(" AND ")}`;
+    }
     query += " ORDER BY username ASC";
 
     const [rows] = await db.execute(query, params);
@@ -251,16 +419,137 @@ app.get("/users", async (req, res) => {
   }
 });
 
+app.get("/conversations", async (req, res) => {
+  try {
+    const userId = toPositiveInt(req.query.userId);
+    const searchTerm = String(req.query.search || "").trim();
+    if (!userId) {
+      return res.status(400).json({ error: "Valid userId query param is required." });
+    }
+
+    const db = getDb();
+    const params = [userId, userId, userId];
+    let searchFilter = "";
+    if (searchTerm) {
+      searchFilter = " AND u.username LIKE ? ";
+      params.push(`%${searchTerm}%`);
+    }
+
+    const [rows] = await db.execute(
+      `
+      SELECT
+        u.id AS user_id,
+        u.username,
+        m.id AS message_id,
+        m.sender_id,
+        m.receiver_id,
+        m.message_type,
+        m.message_encrypted,
+        m.media_url,
+        m.iv,
+        m.created_at,
+        m.deleted_at
+      FROM users u
+      LEFT JOIN messages m ON m.id = (
+        SELECT m2.id
+        FROM messages m2
+        WHERE (
+          (m2.sender_id = ? AND m2.receiver_id = u.id)
+          OR
+          (m2.sender_id = u.id AND m2.receiver_id = ?)
+        )
+        ORDER BY m2.created_at DESC, m2.id DESC
+        LIMIT 1
+      )
+      WHERE u.id <> ?
+      ${searchFilter}
+      ORDER BY
+        CASE WHEN m.created_at IS NULL THEN 1 ELSE 0 END ASC,
+        m.created_at DESC,
+        u.username ASC
+      `,
+      params
+    );
+
+    const conversations = rows.map((row) => {
+      let lastMessage = null;
+      if (row.message_id) {
+        const mapped = mapMessageRow(
+          {
+            id: row.message_id,
+            sender_id: row.sender_id,
+            receiver_id: row.receiver_id,
+            message_type: row.message_type,
+            message_encrypted: row.message_encrypted,
+            media_url: row.media_url,
+            iv: row.iv,
+            created_at: row.created_at,
+            deleted_at: row.deleted_at,
+          },
+          userId
+        );
+        lastMessage = {
+          id: mapped.id,
+          senderId: mapped.senderId,
+          preview: messagePreviewFromType(mapped.messageType, mapped.message),
+          messageType: mapped.messageType,
+          createdAt: mapped.createdAt,
+        };
+      }
+
+      return {
+        userId: row.user_id,
+        username: row.username,
+        lastMessage,
+      };
+    });
+
+    return res.json({ conversations });
+  } catch (error) {
+    console.error("[conversations] failed:", error);
+    return res.status(500).json({ error: "Failed to load conversations." });
+  }
+});
+
 app.post("/send-message", async (req, res) => {
   try {
     const senderId = toPositiveInt(req.body.senderId);
     const receiverId = toPositiveInt(req.body.receiverId);
-    const message = String(req.body.message || "").trim();
+    const messageType = normalizeMessageType(req.body.messageType || MESSAGE_TYPES.TEXT);
+    const message = String(req.body.message || "");
+    const mediaUrl =
+      req.body.mediaUrl === undefined || req.body.mediaUrl === null
+        ? null
+        : String(req.body.mediaUrl).trim();
 
-    if (!senderId || !receiverId || !message) {
+    if (!senderId || !receiverId) {
       return res.status(400).json({
-        error: "senderId, receiverId, and message are required.",
+        error: "senderId and receiverId are required.",
       });
+    }
+
+    if (!ALLOWED_OUTGOING_TYPES.has(messageType)) {
+      return res.status(400).json({
+        error: "messageType must be text, image, or gif.",
+      });
+    }
+
+    if (message.length > MAX_MESSAGE_LENGTH) {
+      return res.status(400).json({
+        error: `Message exceeds ${MAX_MESSAGE_LENGTH} characters.`,
+      });
+    }
+
+    if (messageType === MESSAGE_TYPES.TEXT && !message.trim()) {
+      return res.status(400).json({ error: "Text message cannot be empty." });
+    }
+
+    if ((messageType === MESSAGE_TYPES.IMAGE || messageType === MESSAGE_TYPES.GIF) && !mediaUrl) {
+      return res.status(400).json({ error: "mediaUrl is required for image/gif messages." });
+    }
+
+    if (mediaUrl && mediaUrl.length > MAX_MEDIA_URL_LENGTH) {
+      return res.status(400).json({ error: "Media payload is too large." });
     }
 
     const usersExist = await ensureUsersExist(senderId, receiverId);
@@ -268,16 +557,68 @@ app.post("/send-message", async (req, res) => {
       return res.status(404).json({ error: "Sender or receiver not found." });
     }
 
-    const savedMessage = await persistEncryptedMessage(senderId, receiverId, message);
-    emitToUser(receiverId, "receive_message", savedMessage);
+    const savedMessage = await persistEncryptedMessage({
+      senderId,
+      receiverId,
+      messageText: message,
+      messageType,
+      mediaUrl,
+    });
+
+    const delivered = isUserOnline(receiverId);
+    const senderPayload = {
+      ...savedMessage,
+      status: delivered ? "delivered" : "sent",
+    };
+    const receiverPayload = {
+      ...savedMessage,
+      status: "delivered",
+    };
+
+    emitToUser(receiverId, "receive_message", receiverPayload);
+
+    if (delivered) {
+      emitToUser(senderId, "message_status", {
+        messageId: savedMessage.id,
+        status: "delivered",
+        receiverId,
+      });
+    }
 
     return res.status(201).json({
       message: "Message sent.",
-      data: savedMessage,
+      data: senderPayload,
     });
   } catch (error) {
     console.error("[send-message] failed:", error);
     return res.status(500).json({ error: "Failed to send message." });
+  }
+});
+
+app.post("/delete-message", async (req, res) => {
+  try {
+    const messageId = toPositiveInt(req.body.messageId);
+    const userId = toPositiveInt(req.body.userId);
+
+    if (!messageId || !userId) {
+      return res.status(400).json({ error: "messageId and userId are required." });
+    }
+
+    const deletedMessage = await markMessageDeleted(messageId, userId);
+
+    emitToUser(deletedMessage.senderId, "message_deleted", deletedMessage);
+    emitToUser(deletedMessage.receiverId, "message_deleted", deletedMessage);
+
+    return res.json({
+      message: "Message deleted.",
+      data: deletedMessage,
+    });
+  } catch (error) {
+    const status = error.status || 500;
+    if (status >= 500) {
+      console.error("[delete-message] failed:", error);
+    }
+    return res.status(status).json({ error: error.message || "Failed to delete message." });
   }
 });
 
@@ -295,7 +636,7 @@ app.get("/messages/:userId", async (req, res) => {
     const db = getDb();
     const [rows] = await db.execute(
       `
-      SELECT id, sender_id, receiver_id, message_encrypted, iv, created_at
+      SELECT id, sender_id, receiver_id, message_type, message_encrypted, media_url, iv, created_at, deleted_at
       FROM messages
       WHERE (sender_id = ? AND receiver_id = ?)
          OR (sender_id = ? AND receiver_id = ?)
@@ -304,27 +645,79 @@ app.get("/messages/:userId", async (req, res) => {
       [currentUserId, otherUserId, otherUserId, currentUserId]
     );
 
+    const otherUserOnline = isUserOnline(otherUserId);
     const messages = rows.map((row) => {
-      let decryptedText;
-      try {
-        decryptedText = decryptMessage(row.message_encrypted, row.iv);
-      } catch (error) {
-        decryptedText = "[Unable to decrypt message]";
+      const mapped = mapMessageRow(row, currentUserId);
+      if (mapped.senderId === currentUserId && mapped.messageType !== MESSAGE_TYPES.DELETED) {
+        mapped.status = otherUserOnline ? "delivered" : "sent";
       }
-
-      return {
-        id: row.id,
-        senderId: row.sender_id,
-        receiverId: row.receiver_id,
-        message: decryptedText,
-        createdAt: toIsoString(row.created_at),
-      };
+      return mapped;
     });
 
     return res.json({ messages });
   } catch (error) {
     console.error("[messages] failed:", error);
     return res.status(500).json({ error: "Failed to fetch messages." });
+  }
+});
+
+app.get("/gifs/search", async (req, res) => {
+  try {
+    const query = String(req.query.q || "").trim();
+    const limit = Math.min(Math.max(Number(req.query.limit || 12), 1), 24);
+
+    if (!query) {
+      return res.json({ gifs: [] });
+    }
+
+    if (!GIPHY_API_KEY) {
+      return res.status(503).json({
+        error: "GIF search is not configured. Add GIPHY_API_KEY in environment.",
+      });
+    }
+    if (typeof fetch !== "function") {
+      return res.status(500).json({
+        error: "GIF search is unavailable on this Node runtime.",
+      });
+    }
+
+    const url = new URL("https://api.giphy.com/v1/gifs/search");
+    url.searchParams.set("api_key", GIPHY_API_KEY);
+    url.searchParams.set("q", query);
+    url.searchParams.set("limit", String(limit));
+    url.searchParams.set("rating", "pg-13");
+    url.searchParams.set("lang", "en");
+
+    const response = await fetch(url, {
+      headers: { Accept: "application/json" },
+    });
+
+    if (!response.ok) {
+      throw new Error(`GIPHY responded with status ${response.status}`);
+    }
+
+    const data = await response.json();
+    const gifs = (data.data || [])
+      .map((gif) => ({
+        id: gif.id,
+        title: gif.title || "GIF",
+        previewUrl:
+          gif.images?.fixed_width_small_still?.url ||
+          gif.images?.fixed_width_small?.url ||
+          gif.images?.preview_gif?.url ||
+          null,
+        mediaUrl:
+          gif.images?.downsized_medium?.url ||
+          gif.images?.downsized?.url ||
+          gif.images?.original?.url ||
+          null,
+      }))
+      .filter((gif) => Boolean(gif.mediaUrl));
+
+    return res.json({ gifs });
+  } catch (error) {
+    console.error("[gifs/search] failed:", error);
+    return res.status(500).json({ error: "Failed to search GIFs." });
   }
 });
 
@@ -342,50 +735,166 @@ io.on("connection", (socket) => {
       onlineUsers.set(userKey, new Set());
     }
     onlineUsers.get(userKey).add(socket.id);
-    socket.data.userId = userKey;
+    socket.data.userId = userId;
+  });
+
+  socket.on("typing", (payload) => {
+    const senderId = toPositiveInt(payload && payload.senderId);
+    const receiverId = toPositiveInt(payload && payload.receiverId);
+    const registeredUserId = toPositiveInt(socket.data.userId);
+
+    if (!senderId || !receiverId) {
+      return;
+    }
+
+    if (registeredUserId && senderId !== registeredUserId) {
+      return;
+    }
+
+    emitToUser(receiverId, "typing", { senderId, receiverId });
+  });
+
+  socket.on("stop_typing", (payload) => {
+    const senderId = toPositiveInt(payload && payload.senderId);
+    const receiverId = toPositiveInt(payload && payload.receiverId);
+    const registeredUserId = toPositiveInt(socket.data.userId);
+
+    if (!senderId || !receiverId) {
+      return;
+    }
+
+    if (registeredUserId && senderId !== registeredUserId) {
+      return;
+    }
+
+    emitToUser(receiverId, "stop_typing", { senderId, receiverId });
   });
 
   socket.on("send_message", async (payload, callback) => {
     try {
       const senderId = toPositiveInt(payload && payload.senderId);
       const receiverId = toPositiveInt(payload && payload.receiverId);
-      const message = String((payload && payload.message) || "").trim();
+      const messageType = normalizeMessageType(
+        payload && payload.messageType ? payload.messageType : MESSAGE_TYPES.TEXT
+      );
+      const message = String((payload && payload.message) || "");
+      const mediaUrl =
+        payload && payload.mediaUrl !== undefined && payload.mediaUrl !== null
+          ? String(payload.mediaUrl).trim()
+          : null;
+      const registeredUserId = toPositiveInt(socket.data.userId);
 
-      if (!senderId || !receiverId || !message) {
-        if (typeof callback === "function") {
-          callback({ ok: false, error: "Invalid message payload." });
-        }
-        return;
+      if (!senderId || !receiverId) {
+        throw createHttpError(400, "senderId and receiverId are required.");
+      }
+      if (registeredUserId && senderId !== registeredUserId) {
+        throw createHttpError(403, "Invalid sender identity.");
+      }
+      if (!ALLOWED_OUTGOING_TYPES.has(messageType)) {
+        throw createHttpError(400, "Invalid message type.");
+      }
+      if (message.length > MAX_MESSAGE_LENGTH) {
+        throw createHttpError(400, `Message exceeds ${MAX_MESSAGE_LENGTH} characters.`);
+      }
+      if (messageType === MESSAGE_TYPES.TEXT && !message.trim()) {
+        throw createHttpError(400, "Text message cannot be empty.");
+      }
+      if ((messageType === MESSAGE_TYPES.IMAGE || messageType === MESSAGE_TYPES.GIF) && !mediaUrl) {
+        throw createHttpError(400, "mediaUrl is required for image/gif messages.");
+      }
+      if (mediaUrl && mediaUrl.length > MAX_MEDIA_URL_LENGTH) {
+        throw createHttpError(400, "Media payload is too large.");
       }
 
       const usersExist = await ensureUsersExist(senderId, receiverId);
       if (!usersExist) {
-        if (typeof callback === "function") {
-          callback({ ok: false, error: "Sender or receiver not found." });
-        }
-        return;
+        throw createHttpError(404, "Sender or receiver not found.");
       }
 
-      const savedMessage = await persistEncryptedMessage(senderId, receiverId, message);
-      emitToUser(receiverId, "receive_message", savedMessage);
+      const savedMessage = await persistEncryptedMessage({
+        senderId,
+        receiverId,
+        messageText: message,
+        messageType,
+        mediaUrl,
+      });
+
+      const delivered = isUserOnline(receiverId);
+      const senderPayload = {
+        ...savedMessage,
+        status: delivered ? "delivered" : "sent",
+      };
+      const receiverPayload = {
+        ...savedMessage,
+        status: "delivered",
+      };
+
+      emitToUser(receiverId, "receive_message", receiverPayload);
+      emitToUser(receiverId, "stop_typing", { senderId, receiverId });
+
+      if (delivered) {
+        emitToUser(senderId, "message_status", {
+          messageId: savedMessage.id,
+          status: "delivered",
+          receiverId,
+        });
+      }
 
       if (typeof callback === "function") {
-        callback({ ok: true, message: savedMessage });
+        callback({ ok: true, message: senderPayload });
       }
     } catch (error) {
-      console.error("[socket send_message] failed:", error);
+      const errorMessage = error.message || "Failed to send message.";
+      if ((error.status || 500) >= 500) {
+        console.error("[socket send_message] failed:", error);
+      }
+
       if (typeof callback === "function") {
-        callback({ ok: false, error: "Failed to send message." });
+        callback({ ok: false, error: errorMessage });
+      }
+    }
+  });
+
+  socket.on("delete_message", async (payload, callback) => {
+    try {
+      const messageId = toPositiveInt(payload && payload.messageId);
+      const userId = toPositiveInt(payload && payload.userId);
+      const registeredUserId = toPositiveInt(socket.data.userId);
+
+      if (!messageId || !userId) {
+        throw createHttpError(400, "messageId and userId are required.");
+      }
+
+      if (registeredUserId && userId !== registeredUserId) {
+        throw createHttpError(403, "Invalid user identity.");
+      }
+
+      const deletedMessage = await markMessageDeleted(messageId, userId);
+      emitToUser(deletedMessage.senderId, "message_deleted", deletedMessage);
+      emitToUser(deletedMessage.receiverId, "message_deleted", deletedMessage);
+
+      if (typeof callback === "function") {
+        callback({ ok: true, message: deletedMessage });
+      }
+    } catch (error) {
+      const errorMessage = error.message || "Failed to delete message.";
+      if ((error.status || 500) >= 500) {
+        console.error("[socket delete_message] failed:", error);
+      }
+
+      if (typeof callback === "function") {
+        callback({ ok: false, error: errorMessage });
       }
     }
   });
 
   socket.on("disconnect", () => {
-    const userKey = socket.data.userId;
-    if (!userKey) {
+    const userId = toPositiveInt(socket.data.userId);
+    if (!userId) {
       return;
     }
 
+    const userKey = String(userId);
     const sockets = onlineUsers.get(userKey);
     if (!sockets) {
       return;

@@ -17,6 +17,14 @@
     return data;
   }
 
+  function toQuery(params) {
+    const entries = Object.entries(params || {}).filter(
+      ([, value]) => value !== undefined && value !== null && value !== ""
+    );
+    const searchParams = new URLSearchParams(entries);
+    return searchParams.toString();
+  }
+
   window.Api = {
     signup(username, password) {
       return request("/signup", {
@@ -30,17 +38,33 @@
         body: { username, password },
       });
     },
-    sendMessage(senderId, receiverId, message) {
-      return request("/send-message", {
-        method: "POST",
-        body: { senderId, receiverId, message },
-      });
+    fetchUsers(excludeUserId, search) {
+      const query = toQuery({ exclude: excludeUserId, search });
+      return request(`/users${query ? `?${query}` : ""}`);
+    },
+    fetchConversations(userId, search) {
+      const query = toQuery({ userId, search });
+      return request(`/conversations?${query}`);
     },
     fetchMessages(otherUserId, currentUserId) {
-      return request(`/messages/${otherUserId}?currentUserId=${currentUserId}`);
+      const query = toQuery({ currentUserId });
+      return request(`/messages/${otherUserId}?${query}`);
     },
-    fetchUsers(excludeUserId) {
-      return request(`/users?exclude=${excludeUserId}`);
+    sendMessage(payload) {
+      return request("/send-message", {
+        method: "POST",
+        body: payload,
+      });
+    },
+    deleteMessage(messageId, userId) {
+      return request("/delete-message", {
+        method: "POST",
+        body: { messageId, userId },
+      });
+    },
+    searchGifs(query, limit) {
+      const queryString = toQuery({ q: query, limit });
+      return request(`/gifs/search?${queryString}`);
     },
   };
 })();

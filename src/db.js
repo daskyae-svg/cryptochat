@@ -95,7 +95,10 @@ async function createTables() {
       id INT PRIMARY KEY AUTO_INCREMENT,
       sender_id INT NOT NULL,
       receiver_id INT NOT NULL,
+      message_type VARCHAR(20) NOT NULL DEFAULT 'text',
       message_encrypted TEXT NOT NULL,
+      media_url LONGTEXT NULL,
+      deleted_at TIMESTAMP NULL DEFAULT NULL,
       iv VARCHAR(64) NOT NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       CONSTRAINT fk_messages_sender FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
@@ -107,6 +110,50 @@ async function createTables() {
 
   await pool.query(usersTableSql);
   await pool.query(messagesTableSql);
+  await ensureMessageColumns();
+}
+
+async function columnExists(tableName, columnName) {
+  const [rows] = await pool.execute(
+    `
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = DATABASE()
+      AND table_name = ?
+      AND column_name = ?
+    LIMIT 1
+    `,
+    [tableName, columnName]
+  );
+
+  return rows.length > 0;
+}
+
+async function ensureColumn(tableName, columnName, definitionSql) {
+  const exists = await columnExists(tableName, columnName);
+  if (exists) {
+    return;
+  }
+
+  await pool.query(`ALTER TABLE \`${tableName}\` ADD COLUMN ${definitionSql}`);
+}
+
+async function ensureMessageColumns() {
+  await ensureColumn(
+    "messages",
+    "message_type",
+    "message_type VARCHAR(20) NOT NULL DEFAULT 'text' AFTER receiver_id"
+  );
+  await ensureColumn(
+    "messages",
+    "media_url",
+    "media_url LONGTEXT NULL AFTER message_encrypted"
+  );
+  await ensureColumn(
+    "messages",
+    "deleted_at",
+    "deleted_at TIMESTAMP NULL DEFAULT NULL AFTER media_url"
+  );
 }
 
 function getDb() {
