@@ -36,6 +36,11 @@ body.theme-dark {
   --shadow-sm: 0 8px 18px rgba(0, 0, 0, 0.32);
 }
 
+html,
+body {
+  height: 100%;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -148,11 +153,13 @@ label {
 .chat-body {
   background: var(--bg-app);
   padding: 12px;
+  overflow: hidden;
 }
 
 .app-window {
   width: min(1380px, 100%);
   height: calc(100vh - 24px);
+  max-height: calc(100vh - 24px);
   margin: 0 auto;
   border-radius: 26px;
   overflow: hidden;
@@ -217,25 +224,30 @@ label {
 .app-rail {
   background: color-mix(in srgb, var(--surface) 78%, var(--window));
   border-right: 1px solid var(--border);
-  padding: 16px 8px 12px;
+  padding: 14px 10px 12px;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  align-items: center;
 }
 
 .rail-btn {
-  width: 100%;
-  min-height: 42px;
+  width: 52px;
+  min-height: 52px;
+  height: 52px;
   border: 1px solid var(--border);
   background: var(--surface);
   color: var(--muted);
-  font-size: 0.74rem;
-  font-weight: 800;
   display: grid;
   place-items: center;
-  gap: 4px;
-  padding: 8px 4px;
-  text-align: center;
+  padding: 0;
+  border-radius: 14px;
+}
+
+.rail-btn svg {
+  width: 22px;
+  height: 22px;
+  display: block;
 }
 
 .rail-btn-active {
@@ -244,8 +256,8 @@ label {
   background: linear-gradient(140deg, var(--primary), var(--primary-strong));
 }
 
-.rail-profile-btn span {
-  font-size: 0.67rem;
+.rail-profile-btn {
+  padding: 0;
 }
 
 .rail-spacer {
@@ -266,6 +278,7 @@ label {
   flex-direction: column;
   gap: 10px;
   min-height: 0;
+  overflow: hidden;
 }
 
 .conversation-pane-head h1 {
@@ -299,6 +312,7 @@ label {
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
+  overscroll-behavior: contain;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -396,6 +410,25 @@ label {
   font-weight: 700;
 }
 
+.conversation-identity {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.conversation-presence-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: #9aa9c7;
+}
+
+.conversation-presence-dot.online {
+  background: #19b368;
+}
+
 .conversation-time {
   font-size: 0.74rem;
   color: var(--muted);
@@ -420,6 +453,7 @@ label {
     color-mix(in srgb, var(--surface) 86%, #f5f7fb),
     color-mix(in srgb, var(--surface) 90%, #edf1f7)
   );
+  overflow: hidden;
 }
 
 .chat-header {
@@ -445,6 +479,14 @@ label {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.presence-label {
+  margin: 2px 0 0;
+  min-height: 18px;
+  font-size: 0.78rem;
+  color: #15814a;
+  font-weight: 700;
 }
 
 .typing-label {
@@ -487,10 +529,33 @@ label {
   color: #0b7440;
 }
 
+.chat-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.call-btn[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.call-btn.active {
+  color: #fff;
+  border-color: transparent;
+  background: linear-gradient(140deg, var(--primary), var(--primary-strong));
+}
+
+.call-btn svg {
+  width: 20px;
+  height: 20px;
+}
+
 .messages {
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
+  overscroll-behavior: contain;
   padding: 14px 16px;
   display: flex;
   flex-direction: column;
@@ -587,7 +652,7 @@ label {
 
 .gif-picker-head {
   display: grid;
-  grid-template-columns: 1fr auto auto;
+  grid-template-columns: 1fr auto;
   gap: 8px;
 }
 
@@ -602,6 +667,14 @@ label {
   font-weight: 700;
   color: #fff;
   background: linear-gradient(140deg, #5f78b8, #495f95);
+}
+
+.danger-btn {
+  padding: 8px 11px;
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(140deg, #ef6988, #c93259);
 }
 
 .gif-results {
@@ -634,6 +707,40 @@ label {
   border-top: 1px solid var(--border);
   background: var(--surface);
   padding: 10px 12px 12px;
+}
+
+.call-dock {
+  border-top: 1px solid var(--border);
+  background: color-mix(in srgb, var(--surface) 90%, transparent);
+  padding: 10px 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.call-dock-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.call-label {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.call-sub-label {
+  margin: 2px 0 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.call-dock-actions {
+  display: flex;
+  gap: 8px;
 }
 
 .emoji-panel {
@@ -670,6 +777,11 @@ label {
   background: var(--surface-muted);
   color: var(--text);
   font-weight: 800;
+}
+
+.icon-btn svg {
+  width: 20px;
+  height: 20px;
 }
 
 .composer textarea {
@@ -715,6 +827,17 @@ label {
 .settings-head h3 {
   margin: 0;
   font-size: 1.2rem;
+}
+
+.settings-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-title-icon {
+  width: 22px;
+  height: 22px;
 }
 
 .settings-close-btn {
@@ -767,6 +890,54 @@ label {
   gap: 8px;
 }
 
+.settings-field {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+}
+
+.settings-field input {
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+
+.call-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  padding: 16px;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.call-modal-card {
+  width: min(360px, 100%);
+  border-radius: 16px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
+  padding: 16px;
+}
+
+.call-modal-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 800;
+}
+
+.call-modal-label {
+  margin: 8px 0 0;
+  color: var(--muted);
+}
+
+.call-modal-actions {
+  margin-top: 14px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
 @media (max-width: 1100px) {
   .messenger-shell {
     grid-template-columns: 66px 300px 1fr;
@@ -812,9 +983,11 @@ label {
   }
 
   .rail-btn {
-    min-height: 38px;
-    min-width: 76px;
-    padding: 6px 8px;
+    width: 46px;
+    min-height: 46px;
+    min-width: 46px;
+    height: 46px;
+    padding: 0;
   }
 
   .rail-spacer {
@@ -832,6 +1005,10 @@ label {
 
   .settings-panel {
     width: min(100%, 360px);
+  }
+
+  .call-dock {
+    flex-wrap: wrap;
   }
 }
 

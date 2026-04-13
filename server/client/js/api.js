@@ -68,6 +68,12 @@
         body: { userId, avatarUrl },
       });
     },
+    updateUsername(userId, newUsername) {
+      return request("/profile/username", {
+        method: "POST",
+        body: { userId, newUsername },
+      });
+    },
     searchGifs(query, limit) {
       const queryString = toQuery({ q: query, limit });
       return request(`/gifs/search?${queryString}`);

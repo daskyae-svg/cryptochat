@@ -7,6 +7,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const $ = (id) => document.getElementById(id);
   const MSG = { TEXT: "text", IMAGE: "image", GIF: "gif", DELETED: "deleted" };
+  const CALL = { IDLE: "idle", DIALING: "dialing", CONNECTING: "connecting", ACTIVE: "active" };
   const EMOJIS = [
     "\uD83D\uDE00",
     "\uD83D\uDE04",
@@ -25,6 +26,7 @@ document.addEventListener("DOMContentLoaded", () => {
     currentUserRailAvatar: $("currentUserRailAvatar"),
     activeChatLabel: $("activeChatLabel"),
     activeUserAvatar: $("activeUserAvatar"),
+    activeUserPresence: $("activeUserPresence"),
     typingIndicator: $("typingIndicator"),
     socketStatus: $("socketStatus"),
     statusMessage: $("statusMessage"),
@@ -40,7 +42,6 @@ document.addEventListener("DOMContentLoaded", () => {
     gifToggleBtn: $("gifToggleBtn"),
     gifPicker: $("gifPicker"),
     closeGifBtn: $("closeGifBtn"),
-    manualGifBtn: $("manualGifBtn"),
     gifSearchInput: $("gifSearchInput"),
     gifResults: $("gifResults"),
     themeToggleBtn: $("themeToggleBtn"),
@@ -53,9 +54,23 @@ document.addEventListener("DOMContentLoaded", () => {
     closeSettingsBtn: $("closeSettingsBtn"),
     settingsAvatarPreview: $("settingsAvatarPreview"),
     settingsUsernameLabel: $("settingsUsernameLabel"),
+    usernameInput: $("usernameInput"),
+    saveUsernameBtn: $("saveUsernameBtn"),
     changeAvatarBtn: $("changeAvatarBtn"),
     removeAvatarBtn: $("removeAvatarBtn"),
     profileAvatarInput: $("profileAvatarInput"),
+    callToggleBtn: $("callToggleBtn"),
+    callDock: $("callDock"),
+    callAvatar: $("callAvatar"),
+    callLabel: $("callLabel"),
+    callSubLabel: $("callSubLabel"),
+    muteCallBtn: $("muteCallBtn"),
+    endCallBtn: $("endCallBtn"),
+    incomingCallModal: $("incomingCallModal"),
+    incomingCallLabel: $("incomingCallLabel"),
+    acceptCallBtn: $("acceptCallBtn"),
+    rejectCallBtn: $("rejectCallBtn"),
+    remoteAudio: $("remoteAudio"),
   };
 
   const state = {
@@ -71,6 +86,15 @@ document.addEventListener("DOMContentLoaded", () => {
     typingSent: false,
     typingTimer: null,
     gifTimer: null,
+    call: {
+      status: CALL.IDLE,
+      callId: null,
+      peerUserId: null,
+      peerConnection: null,
+      localStream: null,
+      muted: false,
+      pendingIncoming: null,
+    },
   };
 
   const socket = io(window.APP_CONFIG.SOCKET_URL, { transports: ["websocket", "polling"] });
@@ -79,6 +103,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const BOTTOM_GAP = 110;
   const MAX_IMG = 2 * 1024 * 1024;
   const GIF_DEFAULT = "funny";
+  const RTC_CONFIG = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
 
   const norm = (v) => {
     if (v === undefined || v === null) return null;
@@ -162,6 +187,9 @@ document.addEventListener("DOMContentLoaded", () => {
   function renderCurrentUser() {
     els.currentUserLabel.textContent = `@${currentUser.username}`;
     els.settingsUsernameLabel.textContent = currentUser.username;
+    if (els.usernameInput) {
+      els.usernameInput.value = currentUser.username;
+    }
     paintAvatar(els.currentUserRailAvatar, currentUser.username, currentUser.avatarUrl);
     paintAvatar(els.settingsAvatarPreview, currentUser.username, currentUser.avatarUrl);
   }
@@ -176,7 +204,42 @@ document.addEventListener("DOMContentLoaded", () => {
     els.settingsPanel.classList.toggle("hidden", !show);
   }
 
+  function getSelectedConversation() {
+    return state.conversations.find((c) => c.userId === state.selectedUserId) || null;
+  }
+
+  function updateCallButtonState() {
+    const selected = getSelectedConversation();
+    const callInProgress = Boolean(state.call.callId);
+    const canStartCall =
+      !callInProgress &&
+      Boolean(selected && selected.online && selected.userId !== currentUser.id);
+
+    if (els.callToggleBtn) {
+      els.callToggleBtn.disabled = !canStartCall;
+      els.callToggleBtn.classList.toggle("active", callInProgress);
+    }
+  }
+
+  function updatePresenceLabel() {
+    const selected = getSelectedConversation();
+    if (!els.activeUserPresence) {
+      return;
+    }
+
+    if (!selected) {
+      els.activeUserPresence.textContent = "";
+      els.activeUserPresence.classList.add("hidden");
+      return;
+    }
+
+    els.activeUserPresence.classList.remove("hidden");
+    els.activeUserPresence.textContent = selected.online ? "Online" : "Offline";
+    els.activeUserPresence.style.color = selected.online ? "#15814a" : "var(--muted)";
+  }
+
   function renderConversations() {
+    const previousScrollTop = els.conversationList.scrollTop;
     const term = els.userSearchInput.value.trim().toLowerCase();
     els.conversationList.innerHTML = "";
     const list = state.conversations.filter((c) => c.username.toLowerCase().includes(term));
@@ -203,13 +266,22 @@ document.addEventListener("DOMContentLoaded", () => {
       main.className = "conversation-main";
       const top = document.createElement("div");
       top.className = "conversation-top";
+
+      const identity = document.createElement("span");
+      identity.className = "conversation-identity";
+
+      const dot = document.createElement("span");
+      dot.className = `conversation-presence-dot ${c.online ? "online" : ""}`;
+
       const u = document.createElement("span");
       u.className = "conversation-username";
       u.textContent = c.username;
+      identity.append(dot, u);
+
       const tm = document.createElement("span");
       tm.className = "conversation-time";
       tm.textContent = c.lastMessage ? tConv(c.lastMessage.createdAt) : "";
-      top.append(u, tm);
+      top.append(identity, tm);
 
       const pv = document.createElement("div");
       pv.className = "conversation-preview";
@@ -223,6 +295,9 @@ document.addEventListener("DOMContentLoaded", () => {
       b.addEventListener("click", () => selectConversation(c.userId));
       els.conversationList.appendChild(b);
     });
+
+    const maxScroll = Math.max(0, els.conversationList.scrollHeight - els.conversationList.clientHeight);
+    els.conversationList.scrollTop = Math.min(previousScrollTop, maxScroll);
   }
 
   function setHeader() {
@@ -231,6 +306,8 @@ document.addEventListener("DOMContentLoaded", () => {
       paintAvatar(els.activeUserAvatar, "?", null);
       els.typingIndicator.classList.add("hidden");
       els.typingIndicator.textContent = "";
+      updatePresenceLabel();
+      updateCallButtonState();
       return;
     }
     els.activeChatLabel.textContent = state.selectedUsername;
@@ -242,6 +319,8 @@ document.addEventListener("DOMContentLoaded", () => {
       els.typingIndicator.textContent = "";
       els.typingIndicator.classList.add("hidden");
     }
+    updatePresenceLabel();
+    updateCallButtonState();
   }
 
   function sortConversations() {
@@ -365,9 +444,14 @@ document.addEventListener("DOMContentLoaded", () => {
           userId: c.userId,
           username: c.username,
           avatarUrl: norm(c.avatarUrl),
+          online: Boolean(c.online),
           lastMessage: c.lastMessage || null,
         };
-        state.userMap.set(x.userId, { username: x.username, avatarUrl: x.avatarUrl });
+        state.userMap.set(x.userId, {
+          username: x.username,
+          avatarUrl: x.avatarUrl,
+          online: x.online,
+        });
         return x;
       });
       sortConversations();
@@ -438,7 +522,13 @@ document.addEventListener("DOMContentLoaded", () => {
     let c = state.conversations.find((x) => x.userId === uid);
     if (!c) {
       const ref = state.userMap.get(uid) || {};
-      c = { userId: uid, username: ref.username || `User ${uid}`, avatarUrl: ref.avatarUrl || null, lastMessage: null };
+      c = {
+        userId: uid,
+        username: ref.username || `User ${uid}`,
+        avatarUrl: ref.avatarUrl || null,
+        online: Boolean(ref.online),
+        lastMessage: null,
+      };
       state.conversations.push(c);
     }
     c.lastMessage = { id: m.id, senderId: m.senderId, messageType: m.messageType, preview: preview(m.messageType, m.message), createdAt: m.createdAt };
@@ -589,6 +679,29 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  async function saveUsername() {
+    const nextUsername = String(els.usernameInput.value || "").trim();
+    if (!nextUsername) {
+      setStatus("Username is required.", true);
+      return;
+    }
+    if (nextUsername === currentUser.username) {
+      setStatus("Username is unchanged.", false);
+      return;
+    }
+
+    try {
+      const res = await window.Api.updateUsername(currentUser.id, nextUsername);
+      currentUser.username = String((res.user && res.user.username) || nextUsername);
+      currentUser.avatarUrl = norm(res.user && res.user.avatarUrl);
+      window.AuthStore.saveUser(currentUser);
+      renderCurrentUser();
+      setStatus("Username updated.", false);
+    } catch (e) {
+      setStatus(e.message, true);
+    }
+  }
+
   function renderGifs(gifs) {
     els.gifResults.innerHTML = "";
     if (!gifs || !gifs.length) {
@@ -669,26 +782,359 @@ document.addEventListener("DOMContentLoaded", () => {
     if (open) els.gifPicker.classList.add("hidden");
   }
 
-  function syncUserAvatar(uid, avatarUrl) {
-    const av = norm(avatarUrl);
-    if (state.userMap.has(uid)) state.userMap.get(uid).avatarUrl = av;
+  function resetCallUi() {
+    els.callDock.classList.add("hidden");
+    els.callLabel.textContent = "Voice call";
+    els.callSubLabel.textContent = "";
+    els.muteCallBtn.textContent = "Mute";
+    els.muteCallBtn.disabled = true;
+    els.endCallBtn.disabled = true;
+    els.incomingCallModal.classList.add("hidden");
+    updateCallButtonState();
+  }
+
+  function setCallUi(peerUserId, title, subtitle, isActive) {
+    const profile = state.userMap.get(peerUserId) || getSelectedConversation() || {};
+    paintAvatar(
+      els.callAvatar,
+      profile.username || state.selectedUsername || `User ${peerUserId}`,
+      profile.avatarUrl || null
+    );
+    els.callLabel.textContent = title;
+    els.callSubLabel.textContent = subtitle || "";
+    els.muteCallBtn.textContent = "Mute";
+    els.callDock.classList.remove("hidden");
+    els.muteCallBtn.disabled = !isActive;
+    els.endCallBtn.disabled = false;
+    updateCallButtonState();
+  }
+
+  function setCallStatus(status, subtitle) {
+    state.call.status = status;
+    if (subtitle !== undefined) {
+      els.callSubLabel.textContent = subtitle;
+    }
+    if (status === CALL.ACTIVE) {
+      els.muteCallBtn.disabled = false;
+    }
+  }
+
+  function clearCallMedia() {
+    if (state.call.peerConnection) {
+      state.call.peerConnection.ontrack = null;
+      state.call.peerConnection.onicecandidate = null;
+      state.call.peerConnection.onconnectionstatechange = null;
+      state.call.peerConnection.close();
+      state.call.peerConnection = null;
+    }
+    if (state.call.localStream) {
+      state.call.localStream.getTracks().forEach((track) => track.stop());
+      state.call.localStream = null;
+    }
+    if (els.remoteAudio) {
+      els.remoteAudio.srcObject = null;
+    }
+  }
+
+  async function ensureLocalAudioStream() {
+    if (state.call.localStream) {
+      return state.call.localStream;
+    }
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    state.call.localStream = stream;
+    return stream;
+  }
+
+  function createPeerConnection(peerUserId, callId) {
+    const pc = new RTCPeerConnection(RTC_CONFIG);
+
+    pc.ontrack = (event) => {
+      const [stream] = event.streams;
+      if (stream) {
+        els.remoteAudio.srcObject = stream;
+      }
+    };
+
+    pc.onicecandidate = (event) => {
+      if (!event.candidate || state.call.callId !== callId) {
+        return;
+      }
+      socket.emit("call_ice_candidate", {
+        callId,
+        fromUserId: currentUser.id,
+        toUserId: peerUserId,
+        candidate: event.candidate,
+      });
+    };
+
+    pc.onconnectionstatechange = () => {
+      if (state.call.callId !== callId) {
+        return;
+      }
+      if (pc.connectionState === "connected") {
+        setCallStatus(CALL.ACTIVE, "Connected");
+        return;
+      }
+      if (pc.connectionState === "connecting") {
+        setCallStatus(CALL.CONNECTING, "Connecting...");
+        return;
+      }
+      if (pc.connectionState === "disconnected" || pc.connectionState === "failed") {
+        finishCall(false, "Call ended.");
+      }
+    };
+
+    state.call.peerConnection = pc;
+    return pc;
+  }
+
+  async function attachLocalAudioTracks(pc) {
+    const stream = await ensureLocalAudioStream();
+    stream.getAudioTracks().forEach((track) => {
+      track.enabled = !state.call.muted;
+      pc.addTrack(track, stream);
+    });
+  }
+
+  function activeCallMatches(payload) {
+    return (
+      payload &&
+      state.call.callId &&
+      payload.callId === state.call.callId &&
+      Number(payload.fromUserId) === Number(state.call.peerUserId)
+    );
+  }
+
+  async function startVoiceCall() {
+    const selected = getSelectedConversation();
+    if (!selected || !selected.online) {
+      setStatus("The selected user is offline.", true);
+      return;
+    }
+    if (state.call.callId) {
+      setStatus("A call is already in progress.", true);
+      return;
+    }
+
+    const callId = `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+
+    try {
+      state.call.callId = callId;
+      state.call.peerUserId = selected.userId;
+      state.call.muted = false;
+
+      setCallUi(selected.userId, `Calling ${selected.username}`, "Ringing...", false);
+
+      const pc = createPeerConnection(selected.userId, callId);
+      await attachLocalAudioTracks(pc);
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+
+      await emitAck("call_offer", {
+        callId,
+        fromUserId: currentUser.id,
+        toUserId: selected.userId,
+        offer,
+      });
+
+      setCallStatus(CALL.DIALING, "Waiting for answer...");
+      setStatus("", false);
+    } catch (e) {
+      finishCall(false);
+      setStatus(e.message || "Unable to start call.", true);
+    }
+  }
+
+  async function acceptIncomingCall() {
+    const pending = state.call.pendingIncoming;
+    if (!pending) {
+      return;
+    }
+
+    state.call.pendingIncoming = null;
+    els.incomingCallModal.classList.add("hidden");
+
+    try {
+      const profile = state.userMap.get(pending.fromUserId) || {};
+      state.call.callId = pending.callId;
+      state.call.peerUserId = pending.fromUserId;
+      state.call.muted = false;
+
+      setCallUi(
+        pending.fromUserId,
+        `Voice call with ${profile.username || `User ${pending.fromUserId}`}`,
+        "Connecting...",
+        false
+      );
+
+      const pc = createPeerConnection(pending.fromUserId, pending.callId);
+      await attachLocalAudioTracks(pc);
+      await pc.setRemoteDescription(new RTCSessionDescription(pending.offer));
+
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+
+      await emitAck("call_answer", {
+        callId: pending.callId,
+        fromUserId: currentUser.id,
+        toUserId: pending.fromUserId,
+        answer,
+      });
+
+      setCallStatus(CALL.CONNECTING, "Connecting...");
+      setStatus("", false);
+    } catch (e) {
+      finishCall(false);
+      setStatus(e.message || "Unable to answer call.", true);
+    }
+  }
+
+  function rejectIncomingCall() {
+    const pending = state.call.pendingIncoming;
+    if (!pending) {
+      return;
+    }
+    socket.emit("call_reject", {
+      callId: pending.callId,
+      fromUserId: currentUser.id,
+      toUserId: pending.fromUserId,
+    });
+    state.call.pendingIncoming = null;
+    els.incomingCallModal.classList.add("hidden");
+  }
+
+  function finishCall(notifyPeer, message) {
+    const peerUserId = state.call.peerUserId;
+    const callId = state.call.callId;
+
+    clearCallMedia();
+
+    state.call.status = CALL.IDLE;
+    state.call.callId = null;
+    state.call.peerUserId = null;
+    state.call.muted = false;
+    state.call.pendingIncoming = null;
+
+    if (notifyPeer && peerUserId && callId) {
+      socket.emit("call_end", {
+        callId,
+        fromUserId: currentUser.id,
+        toUserId: peerUserId,
+      });
+    }
+
+    resetCallUi();
+
+    if (message) {
+      setStatus(message, false);
+    }
+  }
+
+  function toggleMuteCall() {
+    if (!state.call.localStream) {
+      return;
+    }
+
+    state.call.muted = !state.call.muted;
+    state.call.localStream.getAudioTracks().forEach((track) => {
+      track.enabled = !state.call.muted;
+    });
+    els.muteCallBtn.textContent = state.call.muted ? "Unmute" : "Mute";
+  }
+
+  function handleIncomingCall(payload) {
+    const callId = norm(payload && payload.callId);
+    const fromUserId = Number(payload && payload.fromUserId);
+    const offer = payload && payload.offer;
+
+    if (!callId || !fromUserId || !offer) {
+      return;
+    }
+
+    if (state.call.callId || state.call.pendingIncoming) {
+      socket.emit("call_reject", {
+        callId,
+        fromUserId: currentUser.id,
+        toUserId: fromUserId,
+      });
+      return;
+    }
+
+    state.call.pendingIncoming = { callId, fromUserId, offer };
+    const profile = state.userMap.get(fromUserId) || {};
+    els.incomingCallLabel.textContent = `${profile.username || `User ${fromUserId}`} is calling you.`;
+    els.incomingCallModal.classList.remove("hidden");
+  }
+
+  async function handleCallAnswer(payload) {
+    if (!activeCallMatches(payload) || !state.call.peerConnection) {
+      return;
+    }
+    try {
+      await state.call.peerConnection.setRemoteDescription(
+        new RTCSessionDescription(payload.answer)
+      );
+      setCallStatus(CALL.CONNECTING, "Connecting...");
+    } catch (_error) {
+      finishCall(false, "Call failed to connect.");
+    }
+  }
+
+  async function handleCallIceCandidate(payload) {
+    if (!activeCallMatches(payload) || !state.call.peerConnection || !payload.candidate) {
+      return;
+    }
+    try {
+      await state.call.peerConnection.addIceCandidate(new RTCIceCandidate(payload.candidate));
+    } catch (_error) {
+      // Ignore stale candidate.
+    }
+  }
+
+  function syncUserProfile(uid, data) {
+    if (!uid || !data) {
+      return;
+    }
+
+    const current = state.userMap.get(uid) || {};
+    if (data.username) {
+      current.username = data.username;
+    }
+    if (Object.prototype.hasOwnProperty.call(data, "avatarUrl")) {
+      current.avatarUrl = norm(data.avatarUrl);
+    }
+    if (Object.prototype.hasOwnProperty.call(data, "online")) {
+      current.online = Boolean(data.online);
+    }
+    state.userMap.set(uid, current);
+
     const c = state.conversations.find((x) => x.userId === uid);
-    if (c) c.avatarUrl = av;
+    if (c) {
+      if (data.username) c.username = data.username;
+      if (Object.prototype.hasOwnProperty.call(data, "avatarUrl")) c.avatarUrl = norm(data.avatarUrl);
+      if (Object.prototype.hasOwnProperty.call(data, "online")) c.online = Boolean(data.online);
+    }
+
     if (state.selectedUserId === uid) {
-      state.selectedAvatarUrl = av;
+      if (data.username) state.selectedUsername = data.username;
+      if (Object.prototype.hasOwnProperty.call(data, "avatarUrl")) {
+        state.selectedAvatarUrl = norm(data.avatarUrl);
+      }
       setHeader();
     }
   }
 
   function bindSocket() {
     socket.on("connect", () => {
-      els.socketStatus.textContent = "Online";
-      els.socketStatus.classList.add("online");
+      updateSocketStatus();
       socket.emit("register", { userId: currentUser.id });
     });
     socket.on("disconnect", () => {
-      els.socketStatus.textContent = "Offline";
-      els.socketStatus.classList.remove("online");
+      updateSocketStatus();
+      if (state.call.callId) {
+        finishCall(false, "Connection lost. Call ended.");
+      }
     });
     socket.on("receive_message", (m) => {
       if (!m || !m.id) return;
@@ -726,17 +1172,45 @@ document.addEventListener("DOMContentLoaded", () => {
       setHeader();
       renderConversations();
     });
+    socket.on("presence_update", (p) => {
+      const uid = Number(p && p.userId);
+      if (!uid) return;
+      const online = Boolean(p && p.online);
+
+      syncUserProfile(uid, { online });
+      if (state.call.callId && state.call.peerUserId === uid && !online) {
+        finishCall(false, "Peer went offline. Call ended.");
+      }
+      setHeader();
+      renderConversations();
+    });
     socket.on("user_profile_updated", (p) => {
       const uid = Number(p && p.userId);
       if (!uid) return;
       const av = norm(p.avatarUrl);
+      const username = norm(p.username);
       if (uid === currentUser.id) {
+        if (username) {
+          currentUser.username = username;
+        }
         currentUser.avatarUrl = av;
         window.AuthStore.saveUser(currentUser);
         renderCurrentUser();
       }
-      syncUserAvatar(uid, av);
+      syncUserProfile(uid, { username, avatarUrl: av });
       renderConversations();
+    });
+
+    socket.on("incoming_call", handleIncomingCall);
+    socket.on("call_answer", handleCallAnswer);
+    socket.on("call_ice_candidate", handleCallIceCandidate);
+    socket.on("call_reject", (p) => {
+      if (!activeCallMatches(p)) return;
+      finishCall(false, "Call was declined.");
+    });
+    socket.on("call_end", (p) => {
+      if (!activeCallMatches(p)) return;
+      finishCall(false, "Call ended.");
     });
   }
 
@@ -756,6 +1230,9 @@ document.addEventListener("DOMContentLoaded", () => {
     els.refreshUsersBtn.addEventListener("click", () => loadConversations());
     els.navLogoutBtn.addEventListener("click", () => {
       stopTyping();
+      if (state.call.callId) {
+        finishCall(true);
+      }
       window.AuthStore.clearUser();
       window.location.replace("/login.html");
     });
@@ -763,6 +1240,13 @@ document.addEventListener("DOMContentLoaded", () => {
     els.removeAvatarBtn.addEventListener("click", () => updateAvatar(null));
     els.profileAvatarInput.addEventListener("change", async () => {
       await uploadAvatar(els.profileAvatarInput.files && els.profileAvatarInput.files[0]);
+    });
+    els.saveUsernameBtn.addEventListener("click", saveUsername);
+    els.usernameInput.addEventListener("keydown", async (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        await saveUsername();
+      }
     });
     els.userSearchInput.addEventListener("input", renderConversations);
 
@@ -794,32 +1278,45 @@ document.addEventListener("DOMContentLoaded", () => {
       await sendImage(els.imageInput.files && els.imageInput.files[0]);
     });
     els.gifToggleBtn.addEventListener("click", () => toggleGif());
-    els.manualGifBtn.addEventListener("click", async () => {
-      const raw = window.prompt("Paste a direct GIF URL:");
-      if (!raw) return;
-      const url = raw.trim();
-      if (!/^https?:\/\//i.test(url)) {
-        setStatus("Please provide a valid http(s) GIF URL.", true);
-        return;
-      }
-      const sent = await sendMessage({ messageType: MSG.GIF, mediaUrl: url, message: els.messageInput.value });
-      if (sent) {
-        clearInput();
-        toggleGif(false);
-      }
-    });
     els.closeGifBtn.addEventListener("click", () => toggleGif(false));
     els.gifSearchInput.addEventListener("input", () => {
       if (state.gifTimer) clearTimeout(state.gifTimer);
       const q = els.gifSearchInput.value;
       state.gifTimer = setTimeout(() => searchGifs(q), 300);
     });
+
+    els.callToggleBtn.addEventListener("click", async () => {
+      await startVoiceCall();
+    });
+    els.acceptCallBtn.addEventListener("click", async () => {
+      await acceptIncomingCall();
+    });
+    els.rejectCallBtn.addEventListener("click", () => {
+      rejectIncomingCall();
+    });
+    els.muteCallBtn.addEventListener("click", () => {
+      toggleMuteCall();
+    });
+    els.endCallBtn.addEventListener("click", () => {
+      finishCall(true, "Call ended.");
+    });
+
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape") {
         setSettings(false);
         toggleGif(false);
         els.emojiPanel.classList.add("hidden");
+        if (state.call.pendingIncoming) {
+          rejectIncomingCall();
+        }
       }
+    });
+
+    window.addEventListener("beforeunload", () => {
+      if (state.call.callId) {
+        finishCall(true);
+      }
+      stopTyping();
     });
   }
 
@@ -828,6 +1325,7 @@ document.addEventListener("DOMContentLoaded", () => {
     renderCurrentUser();
     buildEmojiPanel();
     setHeader();
+    resetCallUi();
     updateSocketStatus();
     bindSocket();
     bindUi();

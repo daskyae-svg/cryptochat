@@ -20,6 +20,8 @@ const SERVER_PORT = Number(process.env.PORT || process.env.SERVER_PORT || 3000);
 const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN || "*";
 const HOST = "0.0.0.0";
 const GIPHY_API_KEY = process.env.GIPHY_API_KEY || "";
+const TENOR_API_KEY = process.env.TENOR_API_KEY || "LIVDSRZULELA";
+const TENOR_CLIENT_KEY = process.env.TENOR_CLIENT_KEY || "cryptochat";
 const MAX_MEDIA_URL_LENGTH = 2_500_000;
 const MAX_MESSAGE_LENGTH = 3000;
 
@@ -90,6 +92,26 @@ function toIsoString(value) {
     return new Date().toISOString();
   }
   return date.toISOString();
+}
+
+function normalizeUsername(rawValue) {
+  return String(rawValue || "").trim();
+}
+
+function validateUsername(username) {
+  if (!username) {
+    return "Username is required.";
+  }
+  if (username.length < 3) {
+    return "Username must be at least 3 characters long.";
+  }
+  if (username.length > 50) {
+    return "Username must be less than or equal to 50 characters.";
+  }
+  if (!/^[A-Za-z0-9_ ]+$/.test(username)) {
+    return "Username can only contain letters, numbers, spaces, and underscores.";
+  }
+  return null;
 }
 
 function normalizeMessageType(rawType) {
@@ -287,19 +309,41 @@ function emitToUser(userId, eventName, payload) {
   });
 }
 
+function emitPresenceUpdate(userId, online) {
+  io.emit("presence_update", {
+    userId: Number(userId),
+    online: Boolean(online),
+  });
+}
+
+function removeSocketFromOnlineUser(userId, socketId) {
+  const userKey = String(userId);
+  const sockets = onlineUsers.get(userKey);
+  if (!sockets) {
+    return false;
+  }
+
+  sockets.delete(socketId);
+  if (sockets.size === 0) {
+    onlineUsers.delete(userKey);
+    return true;
+  }
+
+  return false;
+}
+
 app.post("/signup", async (req, res) => {
   try {
-    const username = String(req.body.username || "").trim();
+    const username = normalizeUsername(req.body.username);
     const password = String(req.body.password || "");
 
-    if (!username || !password) {
-      return res.status(400).json({ error: "Username and password are required." });
+    const usernameValidationError = validateUsername(username);
+    if (usernameValidationError) {
+      return res.status(400).json({ error: usernameValidationError });
     }
 
-    if (username.length < 3) {
-      return res
-        .status(400)
-        .json({ error: "Username must be at least 3 characters long." });
+    if (!password) {
+      return res.status(400).json({ error: "Username and password are required." });
     }
 
     if (password.length < 6) {
@@ -340,7 +384,7 @@ app.post("/signup", async (req, res) => {
 
 app.post("/login", async (req, res) => {
   try {
-    const username = String(req.body.username || "").trim();
+    const username = normalizeUsername(req.body.username);
     const password = String(req.body.password || "");
 
     if (!username || !password) {
@@ -412,6 +456,7 @@ app.get("/users", async (req, res) => {
       id: row.id,
       username: row.username,
       avatarUrl: row.avatar_url || null,
+      online: isUserOnline(row.id),
       createdAt: toIsoString(row.created_at),
     }));
 
@@ -459,6 +504,7 @@ app.post("/profile/avatar", async (req, res) => {
 
     const payload = {
       userId,
+      username: user.username,
       avatarUrl: avatarUrl || null,
     };
 
@@ -475,6 +521,60 @@ app.post("/profile/avatar", async (req, res) => {
   } catch (error) {
     console.error("[profile/avatar] failed:", error);
     return res.status(500).json({ error: "Failed to update profile picture." });
+  }
+});
+
+app.post("/profile/username", async (req, res) => {
+  try {
+    const userId = toPositiveInt(req.body.userId);
+    const newUsername = normalizeUsername(req.body.newUsername);
+
+    if (!userId) {
+      return res.status(400).json({ error: "Valid userId is required." });
+    }
+
+    const usernameValidationError = validateUsername(newUsername);
+    if (usernameValidationError) {
+      return res.status(400).json({ error: usernameValidationError });
+    }
+
+    const existingUser = await findUserById(userId);
+    if (!existingUser) {
+      return res.status(404).json({ error: "User not found." });
+    }
+
+    const db = getDb();
+    await db.execute(
+      `
+      UPDATE users
+      SET username = ?
+      WHERE id = ?
+      `,
+      [newUsername, userId]
+    );
+
+    const payload = {
+      userId,
+      username: newUsername,
+      avatarUrl: existingUser.avatar_url || null,
+    };
+
+    io.emit("user_profile_updated", payload);
+
+    return res.json({
+      message: "Username updated.",
+      user: {
+        id: userId,
+        username: newUsername,
+        avatarUrl: existingUser.avatar_url || null,
+      },
+    });
+  } catch (error) {
+    if (error && error.code === "ER_DUP_ENTRY") {
+      return res.status(409).json({ error: "Username already exists." });
+    }
+    console.error("[profile/username] failed:", error);
+    return res.status(500).json({ error: "Failed to update username." });
   }
 });
 
@@ -561,6 +661,7 @@ app.get("/conversations", async (req, res) => {
         userId: row.user_id,
         username: row.username,
         avatarUrl: row.avatar_url || null,
+        online: isUserOnline(row.user_id),
         lastMessage,
       };
     });
@@ -731,48 +832,88 @@ app.get("/gifs/search", async (req, res) => {
       return res.json({ gifs: [] });
     }
 
-    if (!GIPHY_API_KEY) {
-      return res.status(503).json({
-        error: "GIF search is not configured. Add GIPHY_API_KEY in environment.",
-      });
-    }
     if (typeof fetch !== "function") {
       return res.status(500).json({
         error: "GIF search is unavailable on this Node runtime.",
       });
     }
 
-    const url = new URL("https://api.giphy.com/v1/gifs/search");
-    url.searchParams.set("api_key", GIPHY_API_KEY);
-    url.searchParams.set("q", query);
-    url.searchParams.set("limit", String(limit));
-    url.searchParams.set("rating", "pg-13");
-    url.searchParams.set("lang", "en");
+    if (GIPHY_API_KEY) {
+      const url = new URL("https://api.giphy.com/v1/gifs/search");
+      url.searchParams.set("api_key", GIPHY_API_KEY);
+      url.searchParams.set("q", query);
+      url.searchParams.set("limit", String(limit));
+      url.searchParams.set("rating", "pg-13");
+      url.searchParams.set("lang", "en");
 
-    const response = await fetch(url, {
+      const response = await fetch(url, {
+        headers: { Accept: "application/json" },
+      });
+
+      if (!response.ok) {
+        throw new Error(`GIPHY responded with status ${response.status}`);
+      }
+
+      const data = await response.json();
+      const gifs = (data.data || [])
+        .map((gif) => ({
+          id: `giphy_${gif.id}`,
+          title: gif.title || "GIF",
+          previewUrl:
+            gif.images?.fixed_width_small_still?.url ||
+            gif.images?.fixed_width_small?.url ||
+            gif.images?.preview_gif?.url ||
+            null,
+          mediaUrl:
+            gif.images?.downsized_medium?.url ||
+            gif.images?.downsized?.url ||
+            gif.images?.original?.url ||
+            null,
+        }))
+        .filter((gif) => Boolean(gif.mediaUrl));
+
+      return res.json({ gifs });
+    }
+
+    const tenorUrl = new URL("https://tenor.googleapis.com/v2/search");
+    tenorUrl.searchParams.set("key", TENOR_API_KEY);
+    tenorUrl.searchParams.set("client_key", TENOR_CLIENT_KEY);
+    tenorUrl.searchParams.set("q", query);
+    tenorUrl.searchParams.set("limit", String(limit));
+    tenorUrl.searchParams.set("media_filter", "tinygif,gif,mediumgif");
+    tenorUrl.searchParams.set("contentfilter", "medium");
+
+    const tenorResponse = await fetch(tenorUrl, {
       headers: { Accept: "application/json" },
     });
 
-    if (!response.ok) {
-      throw new Error(`GIPHY responded with status ${response.status}`);
+    if (!tenorResponse.ok) {
+      throw new Error(`Tenor responded with status ${tenorResponse.status}`);
     }
 
-    const data = await response.json();
-    const gifs = (data.data || [])
-      .map((gif) => ({
-        id: gif.id,
-        title: gif.title || "GIF",
-        previewUrl:
-          gif.images?.fixed_width_small_still?.url ||
-          gif.images?.fixed_width_small?.url ||
-          gif.images?.preview_gif?.url ||
-          null,
-        mediaUrl:
-          gif.images?.downsized_medium?.url ||
-          gif.images?.downsized?.url ||
-          gif.images?.original?.url ||
-          null,
-      }))
+    const tenorData = await tenorResponse.json();
+    const gifs = (tenorData.results || [])
+      .map((gif) => {
+        const mediaFormats = gif.media_formats || {};
+        const previewUrl =
+          mediaFormats.tinygif?.preview ||
+          mediaFormats.tinygif?.url ||
+          mediaFormats.gif?.preview ||
+          mediaFormats.gif?.url ||
+          null;
+        const mediaUrl =
+          mediaFormats.mediumgif?.url ||
+          mediaFormats.gif?.url ||
+          mediaFormats.tinygif?.url ||
+          null;
+
+        return {
+          id: `tenor_${gif.id}`,
+          title: gif.content_description || "GIF",
+          previewUrl,
+          mediaUrl,
+        };
+      })
       .filter((gif) => Boolean(gif.mediaUrl));
 
     return res.json({ gifs });
@@ -791,12 +932,26 @@ io.on("connection", (socket) => {
       return;
     }
 
+    const previousUserId = toPositiveInt(socket.data.userId);
+    if (previousUserId && previousUserId !== userId) {
+      const becameOffline = removeSocketFromOnlineUser(previousUserId, socket.id);
+      if (becameOffline) {
+        emitPresenceUpdate(previousUserId, false);
+      }
+    }
+
+    const wasOnline = isUserOnline(userId);
+
     const userKey = String(userId);
     if (!onlineUsers.has(userKey)) {
       onlineUsers.set(userKey, new Set());
     }
     onlineUsers.get(userKey).add(socket.id);
     socket.data.userId = userId;
+
+    if (!wasOnline) {
+      emitPresenceUpdate(userId, true);
+    }
   });
 
   socket.on("typing", (payload) => {
@@ -949,21 +1104,149 @@ io.on("connection", (socket) => {
     }
   });
 
+  socket.on("call_offer", (payload, callback) => {
+    try {
+      const fromUserId = toPositiveInt(payload && payload.fromUserId);
+      const toUserId = toPositiveInt(payload && payload.toUserId);
+      const callId = String((payload && payload.callId) || "").trim();
+      const offer = payload && payload.offer;
+      const registeredUserId = toPositiveInt(socket.data.userId);
+
+      if (!fromUserId || !toUserId || !callId || !offer) {
+        throw createHttpError(400, "fromUserId, toUserId, callId, and offer are required.");
+      }
+      if (fromUserId === toUserId) {
+        throw createHttpError(400, "Cannot call yourself.");
+      }
+      if (registeredUserId && fromUserId !== registeredUserId) {
+        throw createHttpError(403, "Invalid caller identity.");
+      }
+      if (!isUserOnline(toUserId)) {
+        throw createHttpError(409, "The selected user is offline.");
+      }
+
+      emitToUser(toUserId, "incoming_call", {
+        callId,
+        fromUserId,
+        toUserId,
+        offer,
+      });
+
+      if (typeof callback === "function") {
+        callback({ ok: true });
+      }
+    } catch (error) {
+      if ((error.status || 500) >= 500) {
+        console.error("[socket call_offer] failed:", error);
+      }
+      if (typeof callback === "function") {
+        callback({ ok: false, error: error.message || "Failed to start call." });
+      }
+    }
+  });
+
+  socket.on("call_answer", (payload, callback) => {
+    try {
+      const fromUserId = toPositiveInt(payload && payload.fromUserId);
+      const toUserId = toPositiveInt(payload && payload.toUserId);
+      const callId = String((payload && payload.callId) || "").trim();
+      const answer = payload && payload.answer;
+      const registeredUserId = toPositiveInt(socket.data.userId);
+
+      if (!fromUserId || !toUserId || !callId || !answer) {
+        throw createHttpError(400, "fromUserId, toUserId, callId, and answer are required.");
+      }
+      if (registeredUserId && fromUserId !== registeredUserId) {
+        throw createHttpError(403, "Invalid caller identity.");
+      }
+
+      emitToUser(toUserId, "call_answer", {
+        callId,
+        fromUserId,
+        toUserId,
+        answer,
+      });
+
+      if (typeof callback === "function") {
+        callback({ ok: true });
+      }
+    } catch (error) {
+      if ((error.status || 500) >= 500) {
+        console.error("[socket call_answer] failed:", error);
+      }
+      if (typeof callback === "function") {
+        callback({ ok: false, error: error.message || "Failed to answer call." });
+      }
+    }
+  });
+
+  socket.on("call_ice_candidate", (payload) => {
+    try {
+      const fromUserId = toPositiveInt(payload && payload.fromUserId);
+      const toUserId = toPositiveInt(payload && payload.toUserId);
+      const callId = String((payload && payload.callId) || "").trim();
+      const candidate = payload && payload.candidate;
+      const registeredUserId = toPositiveInt(socket.data.userId);
+
+      if (!fromUserId || !toUserId || !callId || !candidate) {
+        return;
+      }
+      if (registeredUserId && fromUserId !== registeredUserId) {
+        return;
+      }
+
+      emitToUser(toUserId, "call_ice_candidate", {
+        callId,
+        fromUserId,
+        toUserId,
+        candidate,
+      });
+    } catch (error) {
+      console.error("[socket call_ice_candidate] failed:", error);
+    }
+  });
+
+  socket.on("call_reject", (payload) => {
+    const fromUserId = toPositiveInt(payload && payload.fromUserId);
+    const toUserId = toPositiveInt(payload && payload.toUserId);
+    const callId = String((payload && payload.callId) || "").trim();
+    const registeredUserId = toPositiveInt(socket.data.userId);
+
+    if (!fromUserId || !toUserId || !callId) {
+      return;
+    }
+    if (registeredUserId && fromUserId !== registeredUserId) {
+      return;
+    }
+
+    emitToUser(toUserId, "call_reject", { callId, fromUserId, toUserId });
+  });
+
+  socket.on("call_end", (payload) => {
+    const fromUserId = toPositiveInt(payload && payload.fromUserId);
+    const toUserId = toPositiveInt(payload && payload.toUserId);
+    const callId = String((payload && payload.callId) || "").trim();
+    const registeredUserId = toPositiveInt(socket.data.userId);
+
+    if (!fromUserId || !toUserId || !callId) {
+      return;
+    }
+    if (registeredUserId && fromUserId !== registeredUserId) {
+      return;
+    }
+
+    emitToUser(toUserId, "call_end", { callId, fromUserId, toUserId });
+  });
+
   socket.on("disconnect", () => {
     const userId = toPositiveInt(socket.data.userId);
     if (!userId) {
       return;
     }
 
-    const userKey = String(userId);
-    const sockets = onlineUsers.get(userKey);
-    if (!sockets) {
-      return;
-    }
-
-    sockets.delete(socket.id);
-    if (sockets.size === 0) {
-      onlineUsers.delete(userKey);
+    const becameOffline = removeSocketFromOnlineUser(userId, socket.id);
+    if (becameOffline) {
+      emitPresenceUpdate(userId, false);
     }
   });
 });

@@ -25,17 +25,32 @@
 
       <main class="messenger-shell">
         <nav class="app-rail">
-          <button id="navChatsBtn" type="button" class="rail-btn rail-btn-active">Chats</button>
-
-          <button id="navProfileBtn" type="button" class="rail-btn rail-profile-btn">
-            <div id="currentUserRailAvatar" class="avatar avatar-rail">?</div>
-            <span>Profile</span>
+          <button id="navChatsBtn" type="button" class="rail-btn rail-btn-active" aria-label="Chats" title="Chats">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M4 5.5C4 4.12 5.12 3 6.5 3h11C18.88 3 20 4.12 20 5.5v8C20 14.88 18.88 16 17.5 16H9l-5 4V5.5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
           </button>
 
-          <button id="navSettingsBtn" type="button" class="rail-btn">Settings</button>
+          <button id="navProfileBtn" type="button" class="rail-btn rail-profile-btn" aria-label="Profile" title="Profile">
+            <div id="currentUserRailAvatar" class="avatar avatar-rail">?</div>
+          </button>
+
+          <button id="navSettingsBtn" type="button" class="rail-btn" aria-label="Preferences" title="Preferences">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M12 8.5a3.5 3.5 0 1 0 0 7a3.5 3.5 0 0 0 0-7z" fill="none" stroke="currentColor" stroke-width="1.8"/>
+              <path d="M19.4 14.5a1 1 0 0 0 .2 1.1l.1.1a1 1 0 0 1 0 1.4l-1 1a1 1 0 0 1-1.4 0l-.1-.1a1 1 0 0 0-1.1-.2a1 1 0 0 0-.6.9V19a1 1 0 0 1-1 1h-1.5a1 1 0 0 1-1-1v-.1a1 1 0 0 0-.6-.9a1 1 0 0 0-1.1.2l-.1.1a1 1 0 0 1-1.4 0l-1-1a1 1 0 0 1 0-1.4l.1-.1a1 1 0 0 0 .2-1.1a1 1 0 0 0-.9-.6H5a1 1 0 0 1-1-1v-1.5a1 1 0 0 1 1-1h.1a1 1 0 0 0 .9-.6a1 1 0 0 0-.2-1.1l-.1-.1a1 1 0 0 1 0-1.4l1-1a1 1 0 0 1 1.4 0l.1.1a1 1 0 0 0 1.1.2a1 1 0 0 0 .6-.9V5a1 1 0 0 1 1-1h1.5a1 1 0 0 1 1 1v.1a1 1 0 0 0 .6.9a1 1 0 0 0 1.1-.2l.1-.1a1 1 0 0 1 1.4 0l1 1a1 1 0 0 1 0 1.4l-.1.1a1 1 0 0 0-.2 1.1a1 1 0 0 0 .9.6H19a1 1 0 0 1 1 1V13a1 1 0 0 1-1 1h-.1a1 1 0 0 0-.9.5z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+            </svg>
+          </button>
 
           <div class="rail-spacer"></div>
-          <button id="navLogoutBtn" type="button" class="rail-btn rail-logout-btn">Logout</button>
+
+          <button id="navLogoutBtn" type="button" class="rail-btn rail-logout-btn" aria-label="Log out" title="Log out">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M10 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M15 16l4-4l-4-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M19 12H9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </button>
         </nav>
 
         <aside class="conversation-pane">
@@ -63,13 +78,35 @@
               <div id="activeUserAvatar" class="avatar avatar-lg">?</div>
               <div>
                 <h2 id="activeChatLabel">Select a conversation</h2>
+                <p id="activeUserPresence" class="presence-label hidden"></p>
                 <p id="typingIndicator" class="typing-label hidden"></p>
               </div>
             </div>
-            <span id="socketStatus" class="socket-status">Offline</span>
+            <div class="chat-header-actions">
+              <button id="callToggleBtn" type="button" class="icon-btn call-btn" title="Voice call" aria-label="Voice call" disabled>
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M5.5 4.5a2 2 0 0 1 2.2-1.96l2.44.26a2 2 0 0 1 1.75 1.45l.5 1.8a2 2 0 0 1-.58 2.02L10.37 9.5a14.62 14.62 0 0 0 4.14 4.14l1.43-1.43a2 2 0 0 1 2.02-.58l1.8.5a2 2 0 0 1 1.45 1.75l.26 2.44a2 2 0 0 1-1.96 2.2h-1A15 15 0 0 1 4.5 5.5v-1z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </button>
+              <span id="socketStatus" class="socket-status">Offline</span>
+            </div>
           </header>
 
           <section id="messagesContainer" class="messages" aria-live="polite"></section>
+
+          <section id="callDock" class="call-dock hidden">
+            <div class="call-dock-main">
+              <div id="callAvatar" class="avatar avatar-lg">?</div>
+              <div>
+                <p id="callLabel" class="call-label">Voice call</p>
+                <p id="callSubLabel" class="call-sub-label"></p>
+              </div>
+            </div>
+            <div class="call-dock-actions">
+              <button id="muteCallBtn" type="button" class="secondary-btn">Mute</button>
+              <button id="endCallBtn" type="button" class="danger-btn">End</button>
+            </div>
+          </section>
 
           <section id="gifPicker" class="gif-picker hidden">
             <div class="gif-picker-head">
@@ -79,7 +116,6 @@
                 placeholder="Search GIFs..."
                 autocomplete="off"
               />
-              <button id="manualGifBtn" type="button" class="secondary-btn">Paste URL</button>
               <button id="closeGifBtn" type="button" class="secondary-btn">Close</button>
             </div>
             <div id="gifResults" class="gif-results"></div>
@@ -92,9 +128,7 @@
             <div class="composer-row">
               <div class="composer-tools">
                 <button id="emojiToggleBtn" type="button" class="icon-btn" title="Emoji">:)</button>
-                <button id="imageUploadBtn" type="button" class="icon-btn" title="Upload image">
-                  +
-                </button>
+                <button id="imageUploadBtn" type="button" class="icon-btn" title="Upload image">+</button>
                 <button id="gifToggleBtn" type="button" class="icon-btn" title="Send GIF">GIF</button>
               </div>
 
@@ -114,14 +148,33 @@
 
         <aside id="settingsPanel" class="settings-panel hidden">
           <header class="settings-head">
-            <h3>Settings</h3>
-            <button id="closeSettingsBtn" type="button" class="icon-btn settings-close-btn">x</button>
+            <div class="settings-title-wrap">
+              <svg class="settings-title-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M12 8.5a3.5 3.5 0 1 0 0 7a3.5 3.5 0 0 0 0-7z" fill="none" stroke="currentColor" stroke-width="1.8"/>
+                <path d="M19.4 14.5a1 1 0 0 0 .2 1.1l.1.1a1 1 0 0 1 0 1.4l-1 1a1 1 0 0 1-1.4 0l-.1-.1a1 1 0 0 0-1.1-.2a1 1 0 0 0-.6.9V19a1 1 0 0 1-1 1h-1.5a1 1 0 0 1-1-1v-.1a1 1 0 0 0-.6-.9a1 1 0 0 0-1.1.2l-.1.1a1 1 0 0 1-1.4 0l-1-1a1 1 0 0 1 0-1.4l.1-.1a1 1 0 0 0 .2-1.1a1 1 0 0 0-.9-.6H5a1 1 0 0 1-1-1v-1.5a1 1 0 0 1 1-1h.1a1 1 0 0 0 .9-.6a1 1 0 0 0-.2-1.1l-.1-.1a1 1 0 0 1 0-1.4l1-1a1 1 0 0 1 1.4 0l.1.1a1 1 0 0 0 1.1.2a1 1 0 0 0 .6-.9V5a1 1 0 0 1 1-1h1.5a1 1 0 0 1 1 1v.1a1 1 0 0 0 .6.9a1 1 0 0 0 1.1-.2l.1-.1a1 1 0 0 1 1.4 0l1 1a1 1 0 0 1 0 1.4l-.1.1a1 1 0 0 0-.2 1.1a1 1 0 0 0 .9.6H19a1 1 0 0 1 1 1V13a1 1 0 0 1-1 1h-.1a1 1 0 0 0-.9.5z" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/>
+              </svg>
+              <h3>Preferences</h3>
+            </div>
+            <button id="closeSettingsBtn" type="button" class="icon-btn settings-close-btn" aria-label="Close">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M18 6L6 18M6 6l12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+              </svg>
+            </button>
           </header>
 
           <section class="settings-card">
             <h4>Appearance</h4>
             <p>Switch between light and dark themes.</p>
             <button id="themeToggleBtn" type="button" class="secondary-btn">Dark Mode</button>
+          </section>
+
+          <section class="settings-card">
+            <h4>Account Name</h4>
+            <p>Choose how your name appears to everyone.</p>
+            <div class="settings-field">
+              <input id="usernameInput" type="text" maxlength="50" placeholder="Enter new username" autocomplete="off" />
+              <button id="saveUsernameBtn" type="button" class="secondary-btn">Save</button>
+            </div>
           </section>
 
           <section class="settings-card">
@@ -148,6 +201,19 @@
         </aside>
       </main>
     </div>
+
+    <section id="incomingCallModal" class="call-modal hidden" role="dialog" aria-modal="true" aria-label="Incoming call">
+      <div class="call-modal-card">
+        <p class="call-modal-title">Incoming voice call</p>
+        <p id="incomingCallLabel" class="call-modal-label"></p>
+        <div class="call-modal-actions">
+          <button id="rejectCallBtn" type="button" class="danger-btn">Decline</button>
+          <button id="acceptCallBtn" type="button" class="secondary-btn">Answer</button>
+        </div>
+      </div>
+    </section>
+
+    <audio id="remoteAudio" autoplay playsinline></audio>
 
     <script src="/socket.io/socket.io.js"></script>
     <script src="/js/config.js"></script>
