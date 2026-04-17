@@ -28,7 +28,11 @@ document.addEventListener("DOMContentLoaded", () => {
     activeUserAvatar: $("activeUserAvatar"),
     activeUserPresence: $("activeUserPresence"),
     typingIndicator: $("typingIndicator"),
-    socketStatus: $("socketStatus"),
+    chatMenuBtn: $("chatMenuBtn"),
+    chatMenuPanel: $("chatMenuPanel"),
+    menuUserAvatar: $("menuUserAvatar"),
+    menuUsername: $("menuUsername"),
+    menuUserStatus: $("menuUserStatus"),
     statusMessage: $("statusMessage"),
     conversationList: $("conversationList"),
     userSearchInput: $("userSearchInput"),
@@ -103,7 +107,13 @@ document.addEventListener("DOMContentLoaded", () => {
   const BOTTOM_GAP = 110;
   const MAX_IMG = 2 * 1024 * 1024;
   const GIF_DEFAULT = "funny";
-  const RTC_CONFIG = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+  let rtcConfig = {
+    iceServers: [
+      { urls: "stun:stun.l.google.com:19302" },
+      { urls: "stun:stun1.l.google.com:19302" },
+      { urls: "stun:stun2.l.google.com:19302" },
+    ],
+  };
 
   const norm = (v) => {
     if (v === undefined || v === null) return null;
@@ -150,14 +160,25 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!force && !nearBottom()) return;
     els.messagesContainer.scrollTop = els.messagesContainer.scrollHeight;
   };
-  function updateSocketStatus() {
-    if (socket.connected) {
-      els.socketStatus.textContent = "Online";
-      els.socketStatus.classList.add("online");
+
+  function toggleChatMenu(show) {
+    els.chatMenuPanel.classList.toggle("hidden", !show);
+  }
+
+  function renderChatMenu() {
+    const selected = getSelectedConversation();
+    if (!selected) {
+      paintAvatar(els.menuUserAvatar, "?", null);
+      els.menuUsername.textContent = "No conversation selected";
+      els.menuUserStatus.textContent = "Offline";
+      els.menuUserStatus.style.color = "var(--muted)";
       return;
     }
-    els.socketStatus.textContent = "Offline";
-    els.socketStatus.classList.remove("online");
+
+    paintAvatar(els.menuUserAvatar, selected.username, selected.avatarUrl);
+    els.menuUsername.textContent = selected.username;
+    els.menuUserStatus.textContent = selected.online ? "Online" : "Offline";
+    els.menuUserStatus.style.color = selected.online ? "#15814a" : "var(--muted)";
   }
   const isOpenConv = (m) =>
     state.selectedUserId &&
@@ -308,6 +329,7 @@ document.addEventListener("DOMContentLoaded", () => {
       els.typingIndicator.textContent = "";
       updatePresenceLabel();
       updateCallButtonState();
+      renderChatMenu();
       return;
     }
     els.activeChatLabel.textContent = state.selectedUsername;
@@ -321,6 +343,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     updatePresenceLabel();
     updateCallButtonState();
+    renderChatMenu();
   }
 
   function sortConversations() {
@@ -506,6 +529,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const c = state.conversations.find((it) => it.userId === userId);
     if (!c) return;
     if (state.selectedUserId && state.selectedUserId !== userId) stopTyping();
+    toggleChatMenu(false);
     state.selectedUserId = userId;
     state.selectedUsername = c.username;
     state.selectedAvatarUrl = c.avatarUrl;
@@ -702,6 +726,17 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  async function loadWebRtcConfig() {
+    try {
+      const config = await window.Api.fetchWebrtcConfig();
+      if (config && Array.isArray(config.iceServers) && config.iceServers.length > 0) {
+        rtcConfig = { iceServers: config.iceServers };
+      }
+    } catch (_error) {
+      // Keep local STUN fallback if backend config fetch fails.
+    }
+  }
+
   function renderGifs(gifs) {
     els.gifResults.innerHTML = "";
     if (!gifs || !gifs.length) {
@@ -846,7 +881,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function createPeerConnection(peerUserId, callId) {
-    const pc = new RTCPeerConnection(RTC_CONFIG);
+    const pc = new RTCPeerConnection(rtcConfig);
 
     pc.ontrack = (event) => {
       const [stream] = event.streams;
@@ -1127,11 +1162,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function bindSocket() {
     socket.on("connect", () => {
-      updateSocketStatus();
       socket.emit("register", { userId: currentUser.id });
     });
     socket.on("disconnect", () => {
-      updateSocketStatus();
       if (state.call.callId) {
         finishCall(false, "Connection lost. Call ended.");
       }
@@ -1301,10 +1334,27 @@ document.addEventListener("DOMContentLoaded", () => {
       finishCall(true, "Call ended.");
     });
 
+    els.chatMenuBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const willShow = els.chatMenuPanel.classList.contains("hidden");
+      toggleChatMenu(willShow);
+    });
+
+    document.addEventListener("click", (e) => {
+      if (!els.chatMenuPanel || els.chatMenuPanel.classList.contains("hidden")) {
+        return;
+      }
+      if (els.chatMenuPanel.contains(e.target) || els.chatMenuBtn.contains(e.target)) {
+        return;
+      }
+      toggleChatMenu(false);
+    });
+
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape") {
         setSettings(false);
         toggleGif(false);
+        toggleChatMenu(false);
         els.emojiPanel.classList.add("hidden");
         if (state.call.pendingIncoming) {
           rejectIncomingCall();
@@ -1326,7 +1376,8 @@ document.addEventListener("DOMContentLoaded", () => {
     buildEmojiPanel();
     setHeader();
     resetCallUi();
-    updateSocketStatus();
+    toggleChatMenu(false);
+    await loadWebRtcConfig();
     bindSocket();
     bindUi();
     await loadConversations();

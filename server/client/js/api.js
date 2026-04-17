@@ -74,6 +74,9 @@
         body: { userId, newUsername },
       });
     },
+    fetchWebrtcConfig() {
+      return request("/webrtc-config");
+    },
     searchGifs(query, limit) {
       const queryString = toQuery({ q: query, limit });
       return request(`/gifs/search?${queryString}`);

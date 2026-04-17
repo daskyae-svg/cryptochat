@@ -22,6 +22,14 @@ const HOST = "0.0.0.0";
 const GIPHY_API_KEY = process.env.GIPHY_API_KEY || "";
 const TENOR_API_KEY = process.env.TENOR_API_KEY || "LIVDSRZULELA";
 const TENOR_CLIENT_KEY = process.env.TENOR_CLIENT_KEY || "cryptochat";
+const DEFAULT_ICE_SERVER_URLS = [
+  "stun:stun.l.google.com:19302",
+  "stun:stun1.l.google.com:19302",
+  "stun:stun2.l.google.com:19302",
+];
+const TURN_URL = String(process.env.TURN_URL || "").trim();
+const TURN_USERNAME = String(process.env.TURN_USERNAME || "").trim();
+const TURN_PASSWORD = String(process.env.TURN_PASSWORD || "").trim();
 const MAX_MEDIA_URL_LENGTH = 2_500_000;
 const MAX_MESSAGE_LENGTH = 3000;
 
@@ -74,6 +82,12 @@ app.get("/health", (_req, res) => {
     status: "ok",
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),
+  });
+});
+
+app.get("/webrtc-config", (_req, res) => {
+  res.json({
+    iceServers: getWebRtcIceServers(),
   });
 });
 
@@ -160,6 +174,20 @@ function messagePreviewFromType(messageType, messageText) {
     return messageText ? `GIF: ${toPreviewText(messageText, 36)}` : "GIF";
   }
   return toPreviewText(messageText, 45);
+}
+
+function getWebRtcIceServers() {
+  const servers = [{ urls: DEFAULT_ICE_SERVER_URLS }];
+
+  if (TURN_URL && TURN_USERNAME && TURN_PASSWORD) {
+    servers.push({
+      urls: TURN_URL,
+      username: TURN_USERNAME,
+      credential: TURN_PASSWORD,
+    });
+  }
+
+  return servers;
 }
 
 function mapMessageRow(row, currentUserId) {

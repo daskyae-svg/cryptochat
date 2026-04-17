@@ -535,6 +535,48 @@ label {
   gap: 10px;
 }
 
+.chat-menu-wrap {
+  position: relative;
+}
+
+.chat-menu-btn {
+  min-width: 42px;
+  width: 42px;
+  padding: 0;
+  border-radius: 12px;
+}
+
+.chat-menu-panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 240px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  box-shadow: var(--shadow-sm);
+  padding: 10px;
+  z-index: 6;
+}
+
+.chat-menu-user {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.chat-menu-name {
+  margin: 0;
+  font-size: 0.92rem;
+  font-weight: 700;
+}
+
+.chat-menu-status {
+  margin: 2px 0 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
 .call-btn[disabled] {
   opacity: 0.45;
   cursor: not-allowed;

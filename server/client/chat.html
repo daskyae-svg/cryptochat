@@ -88,7 +88,24 @@
                   <path d="M5.5 4.5a2 2 0 0 1 2.2-1.96l2.44.26a2 2 0 0 1 1.75 1.45l.5 1.8a2 2 0 0 1-.58 2.02L10.37 9.5a14.62 14.62 0 0 0 4.14 4.14l1.43-1.43a2 2 0 0 1 2.02-.58l1.8.5a2 2 0 0 1 1.45 1.75l.26 2.44a2 2 0 0 1-1.96 2.2h-1A15 15 0 0 1 4.5 5.5v-1z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
               </button>
-              <span id="socketStatus" class="socket-status">Offline</span>
+              <div class="chat-menu-wrap">
+                <button id="chatMenuBtn" type="button" class="icon-btn chat-menu-btn" title="Conversation options" aria-label="Conversation options">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <circle cx="6" cy="12" r="1.8" fill="currentColor" />
+                    <circle cx="12" cy="12" r="1.8" fill="currentColor" />
+                    <circle cx="18" cy="12" r="1.8" fill="currentColor" />
+                  </svg>
+                </button>
+                <section id="chatMenuPanel" class="chat-menu-panel hidden">
+                  <div class="chat-menu-user">
+                    <div id="menuUserAvatar" class="avatar avatar-lg">?</div>
+                    <div>
+                      <p id="menuUsername" class="chat-menu-name">No conversation selected</p>
+                      <p id="menuUserStatus" class="chat-menu-status">Offline</p>
+                    </div>
+                  </div>
+                </section>
+              </div>
             </div>
           </header>
 
