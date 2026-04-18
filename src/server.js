@@ -34,6 +34,16 @@ const TURN_USERNAME = String(process.env.TURN_USERNAME || "").trim();
 const TURN_PASSWORD = String(process.env.TURN_PASSWORD || "").trim();
 const DEFAULT_OPENRELAY_TURN_SERVERS = [
   {
+    urls: "turn:openrelay.metered.ca:3478",
+    username: "openrelayproject",
+    credential: "openrelayproject",
+  },
+  {
+    urls: "turn:openrelay.metered.ca:3478?transport=tcp",
+    username: "openrelayproject",
+    credential: "openrelayproject",
+  },
+  {
     urls: "turn:openrelay.metered.ca:80",
     username: "openrelayproject",
     credential: "openrelayproject",
@@ -48,8 +58,13 @@ const DEFAULT_OPENRELAY_TURN_SERVERS = [
     username: "openrelayproject",
     credential: "openrelayproject",
   },
+  {
+    urls: "turns:openrelay.metered.ca:443?transport=tcp",
+    username: "openrelayproject",
+    credential: "openrelayproject",
+  },
 ];
-const ICE_TRANSPORT_POLICY = String(process.env.ICE_TRANSPORT_POLICY || "all")
+const ICE_TRANSPORT_POLICY = String(process.env.ICE_TRANSPORT_POLICY || "relay")
   .trim()
   .toLowerCase();
 const ICE_CANDIDATE_POOL_SIZE = Number(process.env.ICE_CANDIDATE_POOL_SIZE || 4);
@@ -232,7 +247,10 @@ function getIceCandidatePoolSize() {
 }
 
 function getWebRtcIceServers() {
-  const servers = [{ urls: getConfiguredStunUrls() }];
+  const servers = [];
+  if (getIceTransportPolicy() !== "relay") {
+    servers.push({ urls: getConfiguredStunUrls() });
+  }
   const turnUrls = getConfiguredTurnUrls();
 
   if (turnUrls.length > 0 && TURN_USERNAME && TURN_PASSWORD) {

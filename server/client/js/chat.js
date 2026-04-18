@@ -97,6 +97,7 @@ document.addEventListener("DOMContentLoaded", () => {
       peerConnection: null,
       localStream: null,
       muted: false,
+      hasRelayCandidate: false,
       pendingIncoming: null,
       pendingRemoteCandidates: [],
     },
@@ -113,8 +114,28 @@ document.addEventListener("DOMContentLoaded", () => {
       { urls: "stun:stun.l.google.com:19302" },
       { urls: "stun:stun1.l.google.com:19302" },
       { urls: "stun:stun2.l.google.com:19302" },
+      {
+        urls: "turn:openrelay.metered.ca:80",
+        username: "openrelayproject",
+        credential: "openrelayproject",
+      },
+      {
+        urls: "turn:openrelay.metered.ca:443",
+        username: "openrelayproject",
+        credential: "openrelayproject",
+      },
+      {
+        urls: "turn:openrelay.metered.ca:443?transport=tcp",
+        username: "openrelayproject",
+        credential: "openrelayproject",
+      },
+      {
+        urls: "turns:openrelay.metered.ca:443?transport=tcp",
+        username: "openrelayproject",
+        credential: "openrelayproject",
+      },
     ],
-    iceTransportPolicy: "all",
+    iceTransportPolicy: "relay",
     iceCandidatePoolSize: 4,
   };
 
@@ -893,6 +914,9 @@ document.addEventListener("DOMContentLoaded", () => {
       state.call.peerConnection.ontrack = null;
       state.call.peerConnection.onicecandidate = null;
       state.call.peerConnection.onconnectionstatechange = null;
+      state.call.peerConnection.oniceconnectionstatechange = null;
+      state.call.peerConnection.onicegatheringstatechange = null;
+      state.call.peerConnection.onicecandidateerror = null;
       state.call.peerConnection.close();
       state.call.peerConnection = null;
     }
@@ -933,6 +957,11 @@ document.addEventListener("DOMContentLoaded", () => {
     pc.onicecandidate = (event) => {
       if (!event.candidate) return;
 
+      if (typeof event.candidate.candidate === "string") {
+        state.call.hasRelayCandidate =
+          state.call.hasRelayCandidate || event.candidate.candidate.includes(" typ relay ");
+      }
+
       console.log("SENDING ICE:", event.candidate);
 
       socket.emit("ice-candidate", {
@@ -952,6 +981,16 @@ document.addEventListener("DOMContentLoaded", () => {
       if (pc.connectionState === "connected") {
         console.log("CONNECTED:", pc.connectionState);
         setCallStatus(CALL.ACTIVE, "Connected");
+        return;
+      }
+
+      if (pc.connectionState === "disconnected") {
+        setCallStatus(CALL.CONNECTING, "Reconnecting...");
+        return;
+      }
+
+      if (pc.connectionState === "failed" || pc.connectionState === "closed") {
+        finishCall(false, "Call connection failed.");
       }
     };
 
@@ -960,13 +999,42 @@ document.addEventListener("DOMContentLoaded", () => {
 
       if (state.call.callId !== callId) return;
 
+      if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
+        setCallStatus(CALL.ACTIVE, "Connected");
+        return;
+      }
+
+      if (pc.iceConnectionState === "disconnected") {
+        setCallStatus(CALL.CONNECTING, "Reconnecting...");
+        return;
+      }
+
       if (pc.iceConnectionState === "failed") {
         finishCall(false, "Network path failed. Try again or use TURN relay.");
       }
     };
 
-    pc.onicecandidateerror = () => {
-      console.warn("ICE candidate error");
+    pc.onicegatheringstatechange = () => {
+      if (state.call.callId !== callId) return;
+      if (pc.iceGatheringState !== "complete") return;
+
+      if (liveRtcConfig.iceTransportPolicy === "relay" && !state.call.hasRelayCandidate) {
+        console.warn("No relay ICE candidate gathered. TURN may be blocked or misconfigured.");
+      }
+    };
+
+    pc.onicecandidateerror = (event) => {
+      const url = String((event && event.url) || "");
+      const errorCode = Number((event && event.errorCode) || 0);
+      const errorText = String((event && event.errorText) || "");
+      const isStunLookupNoise = errorCode === 701 && url.startsWith("stun:");
+
+      if (isStunLookupNoise) {
+        console.debug("Ignoring non-fatal STUN ICE candidate error:", { url, errorCode });
+        return;
+      }
+
+      console.warn("ICE candidate error", { url, errorCode, errorText });
     };
 
     state.call.peerConnection = pc;
@@ -1052,6 +1120,7 @@ document.addEventListener("DOMContentLoaded", () => {
       state.call.callId = callId;
       state.call.peerUserId = selected.userId;
       state.call.muted = false;
+      state.call.hasRelayCandidate = false;
       resetRemoteIceState(true);
 
       setCallUi(selected.userId, `Calling ${selected.username}`, "Ringing...", false);
@@ -1092,6 +1161,7 @@ document.addEventListener("DOMContentLoaded", () => {
       state.call.callId = pending.callId;
       state.call.peerUserId = pending.fromUserId;
       state.call.muted = false;
+      state.call.hasRelayCandidate = false;
       resetRemoteIceState(false);
 
       setCallUi(
@@ -1149,6 +1219,7 @@ document.addEventListener("DOMContentLoaded", () => {
     state.call.callId = null;
     state.call.peerUserId = null;
     state.call.muted = false;
+    state.call.hasRelayCandidate = false;
     state.call.pendingIncoming = null;
     resetRemoteIceState(true);
 
