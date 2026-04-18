@@ -32,6 +32,12 @@ const TURN_URLS = String(process.env.TURN_URLS || "").trim();
 const TURN_URL = String(process.env.TURN_URL || "").trim();
 const TURN_USERNAME = String(process.env.TURN_USERNAME || "").trim();
 const TURN_PASSWORD = String(process.env.TURN_PASSWORD || "").trim();
+const TWILIO_ACCOUNT_SID = String(process.env.TWILIO_ACCOUNT_SID || "").trim();
+const TWILIO_AUTH_TOKEN = String(process.env.TWILIO_AUTH_TOKEN || "").trim();
+const TWILIO_NTS_TTL = Number(process.env.TWILIO_NTS_TTL || 3600);
+const USE_OPENRELAY_FALLBACK = String(process.env.USE_OPENRELAY_FALLBACK || "true")
+  .trim()
+  .toLowerCase() !== "false";
 const DEFAULT_OPENRELAY_TURN_SERVERS = [
   {
     urls: "turn:openrelay.metered.ca:3478",
@@ -64,7 +70,7 @@ const DEFAULT_OPENRELAY_TURN_SERVERS = [
     credential: "openrelayproject",
   },
 ];
-const ICE_TRANSPORT_POLICY = String(process.env.ICE_TRANSPORT_POLICY || "relay")
+const ICE_TRANSPORT_POLICY = String(process.env.ICE_TRANSPORT_POLICY || "all")
   .trim()
   .toLowerCase();
 const ICE_CANDIDATE_POOL_SIZE = Number(process.env.ICE_CANDIDATE_POOL_SIZE || 4);
@@ -123,8 +129,14 @@ app.get("/health", (_req, res) => {
   });
 });
 
-app.get("/webrtc-config", (_req, res) => {
-  res.json(getWebRtcConfig());
+app.get("/webrtc-config", async (_req, res) => {
+  try {
+    const config = await getWebRtcConfigForRequest();
+    res.json(config);
+  } catch (error) {
+    console.error("[webrtc-config] failed, using static fallback:", error);
+    res.json(getWebRtcConfig());
+  }
 });
 
 app.get("/", (_req, res) => {
@@ -261,17 +273,153 @@ function getWebRtcIceServers() {
     });
   }
 
-  servers.push(...DEFAULT_OPENRELAY_TURN_SERVERS);
+  if (USE_OPENRELAY_FALLBACK) {
+    servers.push(...DEFAULT_OPENRELAY_TURN_SERVERS);
+  }
 
   return servers;
 }
 
-function getWebRtcConfig() {
+function normalizeIceServerEntry(server) {
+  if (!server || typeof server !== "object") {
+    return null;
+  }
+
+  const rawUrls = server.urls;
+  const urls = Array.isArray(rawUrls)
+    ? rawUrls.map((item) => String(item || "").trim()).filter(Boolean)
+    : [String(rawUrls || "").trim()].filter(Boolean);
+
+  if (!urls.length) {
+    return null;
+  }
+
+  const normalized = { urls };
+  const username = String(server.username || "").trim();
+  const credential = String(server.credential || "").trim();
+
+  if (username) {
+    normalized.username = username;
+  }
+  if (credential) {
+    normalized.credential = credential;
+  }
+
+  return normalized;
+}
+
+function uniqueIceServers(servers) {
+  const deduped = [];
+  const seen = new Set();
+
+  for (const server of servers) {
+    const normalized = normalizeIceServerEntry(server);
+    if (!normalized) {
+      continue;
+    }
+
+    const key = JSON.stringify({
+      urls: normalized.urls,
+      username: normalized.username || "",
+      credential: normalized.credential || "",
+    });
+
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    deduped.push(normalized);
+  }
+
+  return deduped;
+}
+
+function hasTurnServer(servers) {
+  return servers.some((server) => {
+    const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
+    return urls.some((url) => String(url || "").trim().toLowerCase().startsWith("turn"));
+  });
+}
+
+function getTwilioTokenTtl() {
+  if (!Number.isFinite(TWILIO_NTS_TTL)) {
+    return 3600;
+  }
+  return Math.min(Math.max(Math.floor(TWILIO_NTS_TTL), 60), 86400);
+}
+
+function hasTwilioCredentials() {
+  return Boolean(TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN);
+}
+
+async function fetchTwilioIceServers() {
+  if (!hasTwilioCredentials() || typeof fetch !== "function") {
+    return [];
+  }
+
+  const endpoint = `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Tokens.json`;
+  const auth = Buffer.from(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`).toString("base64");
+  const body = new URLSearchParams({ Ttl: String(getTwilioTokenTtl()) });
+
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      Authorization: `Basic ${auth}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+      Accept: "application/json",
+    },
+    body,
+  });
+
+  if (!response.ok) {
+    throw new Error(`Twilio token request failed with status ${response.status}`);
+  }
+
+  const payload = await response.json();
+  const servers = Array.isArray(payload && payload.ice_servers) ? payload.ice_servers : [];
+  return uniqueIceServers(servers);
+}
+
+function buildWebRtcConfig(iceServers) {
+  const normalizedServers = uniqueIceServers(iceServers);
+  const requestedPolicy = getIceTransportPolicy();
+  const effectivePolicy =
+    requestedPolicy === "relay" && !hasTurnServer(normalizedServers) ? "all" : requestedPolicy;
+
   return {
-    iceServers: getWebRtcIceServers(),
-    iceTransportPolicy: getIceTransportPolicy(),
+    iceServers: normalizedServers,
+    iceTransportPolicy: effectivePolicy,
     iceCandidatePoolSize: getIceCandidatePoolSize(),
   };
+}
+
+function getWebRtcConfig() {
+  return buildWebRtcConfig(getWebRtcIceServers());
+}
+
+async function getWebRtcConfigForRequest() {
+  const fallbackServers = getWebRtcIceServers();
+
+  if (!hasTwilioCredentials()) {
+    return buildWebRtcConfig(fallbackServers);
+  }
+
+  try {
+    const twilioServers = await fetchTwilioIceServers();
+    if (!twilioServers.length) {
+      return buildWebRtcConfig(fallbackServers);
+    }
+
+    const mergedServers = USE_OPENRELAY_FALLBACK
+      ? [...twilioServers, ...fallbackServers]
+      : twilioServers;
+
+    return buildWebRtcConfig(mergedServers);
+  } catch (error) {
+    console.error("[webrtc-config] Twilio ICE fetch failed, using fallback servers:", error);
+    return buildWebRtcConfig(fallbackServers);
+  }
 }
 
 function mapMessageRow(row, currentUserId) {

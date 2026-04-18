@@ -135,7 +135,7 @@ document.addEventListener("DOMContentLoaded", () => {
         credential: "openrelayproject",
       },
     ],
-    iceTransportPolicy: "relay",
+    iceTransportPolicy: "all",
     iceCandidatePoolSize: 4,
   };
 
@@ -1027,10 +1027,9 @@ document.addEventListener("DOMContentLoaded", () => {
       const url = String((event && event.url) || "");
       const errorCode = Number((event && event.errorCode) || 0);
       const errorText = String((event && event.errorText) || "");
-      const isStunLookupNoise = errorCode === 701 && url.startsWith("stun:");
+      const isConnectivityProbeFailure = errorCode === 701;
 
-      if (isStunLookupNoise) {
-        console.debug("Ignoring non-fatal STUN ICE candidate error:", { url, errorCode });
+      if (isConnectivityProbeFailure) {
         return;
       }
 
