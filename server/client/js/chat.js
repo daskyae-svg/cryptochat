@@ -98,7 +98,6 @@ document.addEventListener("DOMContentLoaded", () => {
       localStream: null,
       muted: false,
       pendingIncoming: null,
-      remoteDescriptionSet: false,
       pendingRemoteCandidates: [],
     },
   };
@@ -983,7 +982,6 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function resetRemoteIceState(clearQueue) {
-    state.call.remoteDescriptionSet = false;
     if (clearQueue) {
       state.call.pendingRemoteCandidates = [];
     }
@@ -997,7 +995,8 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   async function flushQueuedRemoteCandidates() {
-    if (!state.call.peerConnection || !state.call.remoteDescriptionSet) {
+    const pc = state.call.peerConnection;
+    if (!pc || !pc.remoteDescription || !pc.remoteDescription.type) {
       return;
     }
 
@@ -1008,9 +1007,9 @@ document.addEventListener("DOMContentLoaded", () => {
     const queued = state.call.pendingRemoteCandidates.splice(0);
     for (const candidate of queued) {
       try {
-        await state.call.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-      } catch (_error) {
-        // Ignore malformed/stale candidates from older states.
+        await pc.addIceCandidate(candidate);
+      } catch (error) {
+        console.error("Error adding queued ICE:", error);
       }
     }
   }
@@ -1105,7 +1104,6 @@ document.addEventListener("DOMContentLoaded", () => {
       const pc = await createPeerConnection(pending.fromUserId, pending.callId);
       await attachLocalAudioTracks(pc);
       await pc.setRemoteDescription(new RTCSessionDescription(pending.offer));
-      state.call.remoteDescriptionSet = true;
       await flushQueuedRemoteCandidates();
 
       const answer = await pc.createAnswer();
@@ -1214,7 +1212,6 @@ document.addEventListener("DOMContentLoaded", () => {
       await state.call.peerConnection.setRemoteDescription(
         new RTCSessionDescription(payload.answer)
       );
-      state.call.remoteDescriptionSet = true;
       await flushQueuedRemoteCandidates();
       setCallStatus(CALL.CONNECTING, "Connecting...");
     } catch (_error) {
@@ -1225,13 +1222,21 @@ document.addEventListener("DOMContentLoaded", () => {
   async function handleCallIceCandidate(payload) {
     const callId = getSignalCallId(payload);
     const fromUserId = getSignalFromUserId(payload);
-    const candidate = payload && payload.candidate;
+    const candidateData = payload && payload.candidate;
 
-    if (!callId || !fromUserId || !candidate) {
+    if (!callId || !fromUserId || !candidateData) {
       return;
     }
 
-    console.log("RECEIVED ICE:", candidate);
+    console.log("RECEIVED ICE:", candidateData);
+
+    let candidate;
+    try {
+      candidate = new RTCIceCandidate(candidateData);
+    } catch (error) {
+      console.error("ICE error:", error);
+      return;
+    }
 
     const pending = state.call.pendingIncoming;
     const isEarlyIncomingCandidate =
@@ -1241,6 +1246,7 @@ document.addEventListener("DOMContentLoaded", () => {
       fromUserId === Number(pending.fromUserId);
 
     if (isEarlyIncomingCandidate) {
+      console.log("Queueing ICE...");
       queueRemoteCandidate(candidate);
       return;
     }
@@ -1251,20 +1257,24 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (!state.call.peerConnection) {
       console.warn("PeerConnection not ready yet");
+      console.log("Queueing ICE...");
       queueRemoteCandidate(candidate);
       return;
     }
 
-    if (!state.call.remoteDescriptionSet) {
+    if (
+      !state.call.peerConnection.remoteDescription ||
+      !state.call.peerConnection.remoteDescription.type
+    ) {
+      console.log("Queueing ICE...");
       queueRemoteCandidate(candidate);
       return;
     }
 
     try {
-      await state.call.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-    } catch (_error) {
-      console.error("ICE error:", _error);
-      queueRemoteCandidate(candidate);
+      await state.call.peerConnection.addIceCandidate(candidate);
+    } catch (error) {
+      console.error("ICE error:", error);
     }
   }
 
