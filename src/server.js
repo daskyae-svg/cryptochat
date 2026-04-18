@@ -1198,10 +1198,10 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("call_offer", (payload, callback) => {
+  const relayCallOffer = (payload, callback) => {
     try {
-      const fromUserId = toPositiveInt(payload && payload.fromUserId);
-      const toUserId = toPositiveInt(payload && payload.toUserId);
+      const fromUserId = toPositiveInt(payload && (payload.fromUserId ?? payload.from));
+      const toUserId = toPositiveInt(payload && (payload.toUserId ?? payload.to));
       const callId = String((payload && payload.callId) || "").trim();
       const offer = payload && payload.offer;
       const registeredUserId = toPositiveInt(socket.data.userId);
@@ -1219,12 +1219,16 @@ io.on("connection", (socket) => {
         throw createHttpError(409, "The selected user is offline.");
       }
 
-      emitToUser(toUserId, "incoming_call", {
+      const outgoingPayload = {
         callId,
         fromUserId,
+        from: fromUserId,
         toUserId,
+        to: toUserId,
         offer,
-      });
+      };
+      emitToUser(toUserId, "incoming_call", outgoingPayload);
+      emitToUser(toUserId, "incoming-call", outgoingPayload);
 
       if (typeof callback === "function") {
         callback({ ok: true });
@@ -1237,12 +1241,15 @@ io.on("connection", (socket) => {
         callback({ ok: false, error: error.message || "Failed to start call." });
       }
     }
-  });
+  };
 
-  socket.on("call_answer", (payload, callback) => {
+  socket.on("call_offer", relayCallOffer);
+  socket.on("call-user", relayCallOffer);
+
+  const relayCallAnswer = (payload, callback) => {
     try {
-      const fromUserId = toPositiveInt(payload && payload.fromUserId);
-      const toUserId = toPositiveInt(payload && payload.toUserId);
+      const fromUserId = toPositiveInt(payload && (payload.fromUserId ?? payload.from));
+      const toUserId = toPositiveInt(payload && (payload.toUserId ?? payload.to));
       const callId = String((payload && payload.callId) || "").trim();
       const answer = payload && payload.answer;
       const registeredUserId = toPositiveInt(socket.data.userId);
@@ -1254,12 +1261,16 @@ io.on("connection", (socket) => {
         throw createHttpError(403, "Invalid caller identity.");
       }
 
-      emitToUser(toUserId, "call_answer", {
+      const outgoingPayload = {
         callId,
         fromUserId,
+        from: fromUserId,
         toUserId,
+        to: toUserId,
         answer,
-      });
+      };
+      emitToUser(toUserId, "call_answer", outgoingPayload);
+      emitToUser(toUserId, "call-answered", outgoingPayload);
 
       if (typeof callback === "function") {
         callback({ ok: true });
@@ -1272,12 +1283,15 @@ io.on("connection", (socket) => {
         callback({ ok: false, error: error.message || "Failed to answer call." });
       }
     }
-  });
+  };
+
+  socket.on("call_answer", relayCallAnswer);
+  socket.on("answer-call", relayCallAnswer);
 
   const relayIceCandidate = (payload) => {
     try {
-      const fromUserId = toPositiveInt(payload && payload.fromUserId);
-      const toUserId = toPositiveInt(payload && payload.toUserId);
+      const fromUserId = toPositiveInt(payload && (payload.fromUserId ?? payload.from));
+      const toUserId = toPositiveInt(payload && (payload.toUserId ?? payload.to));
       const callId = String((payload && payload.callId) || "").trim();
       const candidate = payload && payload.candidate;
       const registeredUserId = toPositiveInt(socket.data.userId);
@@ -1289,18 +1303,16 @@ io.on("connection", (socket) => {
         return;
       }
 
-      emitToUser(toUserId, "call_ice_candidate", {
+      const outgoingPayload = {
         callId,
         fromUserId,
+        from: fromUserId,
         toUserId,
+        to: toUserId,
         candidate,
-      });
-      emitToUser(toUserId, "ice-candidate", {
-        callId,
-        fromUserId,
-        toUserId,
-        candidate,
-      });
+      };
+      emitToUser(toUserId, "call_ice_candidate", outgoingPayload);
+      emitToUser(toUserId, "ice-candidate", outgoingPayload);
     } catch (error) {
       console.error("[socket call_ice_candidate] failed:", error);
     }

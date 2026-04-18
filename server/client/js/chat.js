@@ -730,31 +730,45 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  async function loadWebRtcConfig() {
+  function mergeWebRtcConfig(config) {
+    if (!config || typeof config !== "object") {
+      return rtcConfig;
+    }
+
+    const nextConfig = { ...rtcConfig };
+
+    if (Array.isArray(config.iceServers) && config.iceServers.length > 0) {
+      nextConfig.iceServers = config.iceServers;
+    }
+
+    if (config.iceTransportPolicy === "relay" || config.iceTransportPolicy === "all") {
+      nextConfig.iceTransportPolicy = config.iceTransportPolicy;
+    }
+
+    const poolSize = Number(config.iceCandidatePoolSize);
+    if (Number.isInteger(poolSize) && poolSize >= 0) {
+      nextConfig.iceCandidatePoolSize = Math.min(poolSize, 16);
+    }
+
+    rtcConfig = nextConfig;
+    return rtcConfig;
+  }
+
+  async function fetchWebRtcConfigForCall() {
     try {
       const config = await window.Api.fetchWebrtcConfig();
-      if (!config || typeof config !== "object") {
-        return;
-      }
-
-      const nextConfig = { ...rtcConfig };
-
-      if (Array.isArray(config.iceServers) && config.iceServers.length > 0) {
-        nextConfig.iceServers = config.iceServers;
-      }
-
-      if (config.iceTransportPolicy === "relay" || config.iceTransportPolicy === "all") {
-        nextConfig.iceTransportPolicy = config.iceTransportPolicy;
-      }
-
-      const poolSize = Number(config.iceCandidatePoolSize);
-      if (Number.isInteger(poolSize) && poolSize >= 0) {
-        nextConfig.iceCandidatePoolSize = Math.min(poolSize, 16);
-      }
-
-      rtcConfig = nextConfig;
+      return mergeWebRtcConfig(config);
     } catch (_error) {
-      // Keep local STUN fallback if backend config fetch fails.
+      // Keep local STUN/TURN fallback if backend config fetch fails.
+      return rtcConfig;
+    }
+  }
+
+  async function loadWebRtcConfig() {
+    try {
+      await fetchWebRtcConfigForCall();
+    } catch (_error) {
+      // Keep local STUN/TURN fallback if backend config fetch fails.
     }
   }
 
@@ -901,35 +915,51 @@ document.addEventListener("DOMContentLoaded", () => {
     return stream;
   }
 
-  function createPeerConnection(peerUserId, callId) {
+  async function createPeerConnection(peerUserId, callId) {
+    const liveRtcConfig = await fetchWebRtcConfigForCall();
     const pc = new RTCPeerConnection({
-      ...rtcConfig,
-      iceServers: rtcConfig.iceServers,
+      ...liveRtcConfig,
+      iceServers: liveRtcConfig.iceServers,
     });
 
     pc.ontrack = (event) => {
-      const [stream] = event.streams;
-      if (stream) {
-        els.remoteAudio.srcObject = stream;
+      console.log("RECEIVED TRACK");
+
+      const remoteAudio = document.getElementById("remoteAudio");
+      if (remoteAudio && event.streams && event.streams[0]) {
+        remoteAudio.srcObject = event.streams[0];
       }
     };
 
     pc.onicecandidate = (event) => {
-      if (!event.candidate || state.call.callId !== callId) {
-        return;
-      }
-      socket.emit("call_ice_candidate", {
+      if (!event.candidate) return;
+
+      console.log("SENDING ICE:", event.candidate);
+
+      socket.emit("ice-candidate", {
         callId,
         fromUserId: currentUser.id,
         toUserId: peerUserId,
+        to: peerUserId,
         candidate: event.candidate,
       });
     };
 
-    pc.oniceconnectionstatechange = () => {
-      if (state.call.callId !== callId) {
-        return;
+    pc.onconnectionstatechange = () => {
+      console.log("STATE:", pc.connectionState);
+
+      if (state.call.callId !== callId) return;
+
+      if (pc.connectionState === "connected") {
+        console.log("CONNECTED:", pc.connectionState);
+        setCallStatus(CALL.ACTIVE, "Connected");
       }
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      console.log("ICE STATE:", pc.iceConnectionState);
+
+      if (state.call.callId !== callId) return;
 
       if (pc.iceConnectionState === "failed") {
         finishCall(false, "Network path failed. Try again or use TURN relay.");
@@ -937,24 +967,7 @@ document.addEventListener("DOMContentLoaded", () => {
     };
 
     pc.onicecandidateerror = () => {
-      // Non-fatal: ICE agent will continue trying remaining candidates.
-    };
-
-    pc.onconnectionstatechange = () => {
-      if (state.call.callId !== callId) {
-        return;
-      }
-      if (pc.connectionState === "connected") {
-        setCallStatus(CALL.ACTIVE, "Connected");
-        return;
-      }
-      if (pc.connectionState === "connecting") {
-        setCallStatus(CALL.CONNECTING, "Connecting...");
-        return;
-      }
-      if (pc.connectionState === "disconnected" || pc.connectionState === "failed") {
-        finishCall(false, "Call ended.");
-      }
+      console.warn("ICE candidate error");
     };
 
     state.call.peerConnection = pc;
@@ -1002,12 +1015,20 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  function getSignalFromUserId(payload) {
+    return Number(payload && (payload.fromUserId ?? payload.from));
+  }
+
+  function getSignalCallId(payload) {
+    return norm(payload && payload.callId);
+  }
+
   function activeCallMatches(payload) {
     return (
       payload &&
       state.call.callId &&
-      payload.callId === state.call.callId &&
-      Number(payload.fromUserId) === Number(state.call.peerUserId)
+      getSignalCallId(payload) === state.call.callId &&
+      getSignalFromUserId(payload) === Number(state.call.peerUserId)
     );
   }
 
@@ -1036,10 +1057,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
       setCallUi(selected.userId, `Calling ${selected.username}`, "Ringing...", false);
 
-      const pc = createPeerConnection(selected.userId, callId);
+      const pc = await createPeerConnection(selected.userId, callId);
       await attachLocalAudioTracks(pc);
 
       const offer = await pc.createOffer();
+      console.log("OFFER CREATED");
       await pc.setLocalDescription(offer);
 
       await emitAck("call_offer", {
@@ -1080,13 +1102,14 @@ document.addEventListener("DOMContentLoaded", () => {
         false
       );
 
-      const pc = createPeerConnection(pending.fromUserId, pending.callId);
+      const pc = await createPeerConnection(pending.fromUserId, pending.callId);
       await attachLocalAudioTracks(pc);
       await pc.setRemoteDescription(new RTCSessionDescription(pending.offer));
       state.call.remoteDescriptionSet = true;
       await flushQueuedRemoteCandidates();
 
       const answer = await pc.createAnswer();
+      console.log("ANSWER CREATED");
       await pc.setLocalDescription(answer);
 
       await emitAck("call_answer", {
@@ -1159,8 +1182,8 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function handleIncomingCall(payload) {
-    const callId = norm(payload && payload.callId);
-    const fromUserId = Number(payload && payload.fromUserId);
+    const callId = getSignalCallId(payload);
+    const fromUserId = getSignalFromUserId(payload);
     const offer = payload && payload.offer;
 
     if (!callId || !fromUserId || !offer) {
@@ -1200,8 +1223,8 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   async function handleCallIceCandidate(payload) {
-    const callId = norm(payload && payload.callId);
-    const fromUserId = Number(payload && payload.fromUserId);
+    const callId = getSignalCallId(payload);
+    const fromUserId = getSignalFromUserId(payload);
     const candidate = payload && payload.candidate;
 
     if (!callId || !fromUserId || !candidate) {
@@ -1226,7 +1249,13 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    if (!state.call.peerConnection || !state.call.remoteDescriptionSet) {
+    if (!state.call.peerConnection) {
+      console.warn("PeerConnection not ready yet");
+      queueRemoteCandidate(candidate);
+      return;
+    }
+
+    if (!state.call.remoteDescriptionSet) {
       queueRemoteCandidate(candidate);
       return;
     }
@@ -1346,9 +1375,8 @@ document.addEventListener("DOMContentLoaded", () => {
       renderConversations();
     });
 
-    socket.on("incoming_call", handleIncomingCall);
-    socket.on("call_answer", handleCallAnswer);
-    socket.on("call_ice_candidate", handleCallIceCandidate);
+    socket.on("incoming-call", handleIncomingCall);
+    socket.on("call-answered", handleCallAnswer);
     socket.on("ice-candidate", handleCallIceCandidate);
     socket.on("call_reject", (p) => {
       if (!activeCallMatches(p)) return;
