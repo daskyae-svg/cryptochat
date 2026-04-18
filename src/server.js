@@ -1274,7 +1274,7 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("call_ice_candidate", (payload) => {
+  const relayIceCandidate = (payload) => {
     try {
       const fromUserId = toPositiveInt(payload && payload.fromUserId);
       const toUserId = toPositiveInt(payload && payload.toUserId);
@@ -1295,10 +1295,19 @@ io.on("connection", (socket) => {
         toUserId,
         candidate,
       });
+      emitToUser(toUserId, "ice-candidate", {
+        callId,
+        fromUserId,
+        toUserId,
+        candidate,
+      });
     } catch (error) {
       console.error("[socket call_ice_candidate] failed:", error);
     }
-  });
+  };
+
+  socket.on("call_ice_candidate", relayIceCandidate);
+  socket.on("ice-candidate", relayIceCandidate);
 
   socket.on("call_reject", (payload) => {
     const fromUserId = toPositiveInt(payload && payload.fromUserId);

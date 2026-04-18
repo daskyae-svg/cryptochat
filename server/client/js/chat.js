@@ -1208,6 +1208,8 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
+    console.log("RECEIVED ICE:", candidate);
+
     const pending = state.call.pendingIncoming;
     const isEarlyIncomingCandidate =
       pending &&
@@ -1232,6 +1234,7 @@ document.addEventListener("DOMContentLoaded", () => {
     try {
       await state.call.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
     } catch (_error) {
+      console.error("ICE error:", _error);
       queueRemoteCandidate(candidate);
     }
   }
@@ -1346,6 +1349,7 @@ document.addEventListener("DOMContentLoaded", () => {
     socket.on("incoming_call", handleIncomingCall);
     socket.on("call_answer", handleCallAnswer);
     socket.on("call_ice_candidate", handleCallIceCandidate);
+    socket.on("ice-candidate", handleCallIceCandidate);
     socket.on("call_reject", (p) => {
       if (!activeCallMatches(p)) return;
       finishCall(false, "Call was declined.");
