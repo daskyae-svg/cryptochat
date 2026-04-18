@@ -32,6 +32,23 @@ const TURN_URLS = String(process.env.TURN_URLS || "").trim();
 const TURN_URL = String(process.env.TURN_URL || "").trim();
 const TURN_USERNAME = String(process.env.TURN_USERNAME || "").trim();
 const TURN_PASSWORD = String(process.env.TURN_PASSWORD || "").trim();
+const DEFAULT_OPENRELAY_TURN_SERVERS = [
+  {
+    urls: "turn:openrelay.metered.ca:80",
+    username: "openrelayproject",
+    credential: "openrelayproject",
+  },
+  {
+    urls: "turn:openrelay.metered.ca:443",
+    username: "openrelayproject",
+    credential: "openrelayproject",
+  },
+  {
+    urls: "turn:openrelay.metered.ca:443?transport=tcp",
+    username: "openrelayproject",
+    credential: "openrelayproject",
+  },
+];
 const ICE_TRANSPORT_POLICY = String(process.env.ICE_TRANSPORT_POLICY || "all")
   .trim()
   .toLowerCase();
@@ -225,6 +242,8 @@ function getWebRtcIceServers() {
       credential: TURN_PASSWORD,
     });
   }
+
+  servers.push(...DEFAULT_OPENRELAY_TURN_SERVERS);
 
   return servers;
 }
