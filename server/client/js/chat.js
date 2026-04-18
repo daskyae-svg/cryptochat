@@ -113,6 +113,8 @@ document.addEventListener("DOMContentLoaded", () => {
       { urls: "stun:stun1.l.google.com:19302" },
       { urls: "stun:stun2.l.google.com:19302" },
     ],
+    iceTransportPolicy: "all",
+    iceCandidatePoolSize: 4,
   };
 
   const norm = (v) => {
@@ -729,9 +731,26 @@ document.addEventListener("DOMContentLoaded", () => {
   async function loadWebRtcConfig() {
     try {
       const config = await window.Api.fetchWebrtcConfig();
-      if (config && Array.isArray(config.iceServers) && config.iceServers.length > 0) {
-        rtcConfig = { iceServers: config.iceServers };
+      if (!config || typeof config !== "object") {
+        return;
       }
+
+      const nextConfig = { ...rtcConfig };
+
+      if (Array.isArray(config.iceServers) && config.iceServers.length > 0) {
+        nextConfig.iceServers = config.iceServers;
+      }
+
+      if (config.iceTransportPolicy === "relay" || config.iceTransportPolicy === "all") {
+        nextConfig.iceTransportPolicy = config.iceTransportPolicy;
+      }
+
+      const poolSize = Number(config.iceCandidatePoolSize);
+      if (Number.isInteger(poolSize) && poolSize >= 0) {
+        nextConfig.iceCandidatePoolSize = Math.min(poolSize, 16);
+      }
+
+      rtcConfig = nextConfig;
     } catch (_error) {
       // Keep local STUN fallback if backend config fetch fails.
     }
@@ -881,7 +900,10 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function createPeerConnection(peerUserId, callId) {
-    const pc = new RTCPeerConnection(rtcConfig);
+    const pc = new RTCPeerConnection({
+      ...rtcConfig,
+      iceServers: rtcConfig.iceServers,
+    });
 
     pc.ontrack = (event) => {
       const [stream] = event.streams;
