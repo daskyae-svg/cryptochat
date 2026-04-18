@@ -98,6 +98,8 @@ document.addEventListener("DOMContentLoaded", () => {
       localStream: null,
       muted: false,
       pendingIncoming: null,
+      remoteDescriptionSet: false,
+      pendingRemoteCandidates: [],
     },
   };
 
@@ -924,6 +926,20 @@ document.addEventListener("DOMContentLoaded", () => {
       });
     };
 
+    pc.oniceconnectionstatechange = () => {
+      if (state.call.callId !== callId) {
+        return;
+      }
+
+      if (pc.iceConnectionState === "failed") {
+        finishCall(false, "Network path failed. Try again or use TURN relay.");
+      }
+    };
+
+    pc.onicecandidateerror = () => {
+      // Non-fatal: ICE agent will continue trying remaining candidates.
+    };
+
     pc.onconnectionstatechange = () => {
       if (state.call.callId !== callId) {
         return;
@@ -953,6 +969,39 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  function resetRemoteIceState(clearQueue) {
+    state.call.remoteDescriptionSet = false;
+    if (clearQueue) {
+      state.call.pendingRemoteCandidates = [];
+    }
+  }
+
+  function queueRemoteCandidate(candidate) {
+    if (!candidate) {
+      return;
+    }
+    state.call.pendingRemoteCandidates.push(candidate);
+  }
+
+  async function flushQueuedRemoteCandidates() {
+    if (!state.call.peerConnection || !state.call.remoteDescriptionSet) {
+      return;
+    }
+
+    if (!state.call.pendingRemoteCandidates.length) {
+      return;
+    }
+
+    const queued = state.call.pendingRemoteCandidates.splice(0);
+    for (const candidate of queued) {
+      try {
+        await state.call.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+      } catch (_error) {
+        // Ignore malformed/stale candidates from older states.
+      }
+    }
+  }
+
   function activeCallMatches(payload) {
     return (
       payload &&
@@ -964,6 +1013,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
   async function startVoiceCall() {
     const selected = getSelectedConversation();
+    if (!socket.connected) {
+      setStatus("Realtime connection is offline. Please reconnect and try again.", true);
+      return;
+    }
     if (!selected || !selected.online) {
       setStatus("The selected user is offline.", true);
       return;
@@ -979,6 +1032,7 @@ document.addEventListener("DOMContentLoaded", () => {
       state.call.callId = callId;
       state.call.peerUserId = selected.userId;
       state.call.muted = false;
+      resetRemoteIceState(true);
 
       setCallUi(selected.userId, `Calling ${selected.username}`, "Ringing...", false);
 
@@ -1017,6 +1071,7 @@ document.addEventListener("DOMContentLoaded", () => {
       state.call.callId = pending.callId;
       state.call.peerUserId = pending.fromUserId;
       state.call.muted = false;
+      resetRemoteIceState(false);
 
       setCallUi(
         pending.fromUserId,
@@ -1028,6 +1083,8 @@ document.addEventListener("DOMContentLoaded", () => {
       const pc = createPeerConnection(pending.fromUserId, pending.callId);
       await attachLocalAudioTracks(pc);
       await pc.setRemoteDescription(new RTCSessionDescription(pending.offer));
+      state.call.remoteDescriptionSet = true;
+      await flushQueuedRemoteCandidates();
 
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
@@ -1072,6 +1129,7 @@ document.addEventListener("DOMContentLoaded", () => {
     state.call.peerUserId = null;
     state.call.muted = false;
     state.call.pendingIncoming = null;
+    resetRemoteIceState(true);
 
     if (notifyPeer && peerUserId && callId) {
       socket.emit("call_end", {
@@ -1119,6 +1177,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     state.call.pendingIncoming = { callId, fromUserId, offer };
+    resetRemoteIceState(true);
     const profile = state.userMap.get(fromUserId) || {};
     els.incomingCallLabel.textContent = `${profile.username || `User ${fromUserId}`} is calling you.`;
     els.incomingCallModal.classList.remove("hidden");
@@ -1132,6 +1191,8 @@ document.addEventListener("DOMContentLoaded", () => {
       await state.call.peerConnection.setRemoteDescription(
         new RTCSessionDescription(payload.answer)
       );
+      state.call.remoteDescriptionSet = true;
+      await flushQueuedRemoteCandidates();
       setCallStatus(CALL.CONNECTING, "Connecting...");
     } catch (_error) {
       finishCall(false, "Call failed to connect.");
@@ -1139,13 +1200,39 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   async function handleCallIceCandidate(payload) {
-    if (!activeCallMatches(payload) || !state.call.peerConnection || !payload.candidate) {
+    const callId = norm(payload && payload.callId);
+    const fromUserId = Number(payload && payload.fromUserId);
+    const candidate = payload && payload.candidate;
+
+    if (!callId || !fromUserId || !candidate) {
       return;
     }
+
+    const pending = state.call.pendingIncoming;
+    const isEarlyIncomingCandidate =
+      pending &&
+      !state.call.callId &&
+      callId === pending.callId &&
+      fromUserId === Number(pending.fromUserId);
+
+    if (isEarlyIncomingCandidate) {
+      queueRemoteCandidate(candidate);
+      return;
+    }
+
+    if (!activeCallMatches(payload)) {
+      return;
+    }
+
+    if (!state.call.peerConnection || !state.call.remoteDescriptionSet) {
+      queueRemoteCandidate(candidate);
+      return;
+    }
+
     try {
-      await state.call.peerConnection.addIceCandidate(new RTCIceCandidate(payload.candidate));
+      await state.call.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
     } catch (_error) {
-      // Ignore stale candidate.
+      queueRemoteCandidate(candidate);
     }
   }
 
