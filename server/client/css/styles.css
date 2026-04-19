@@ -156,6 +156,31 @@ label {
   overflow: hidden;
 }
 
+.announcement-toast {
+  position: fixed;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  max-width: min(92vw, 760px);
+  border: 1px solid color-mix(in srgb, var(--primary) 38%, var(--border));
+  border-radius: 12px;
+  padding: 10px 14px;
+  background: color-mix(in srgb, var(--surface) 88%, #fff);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+  font-size: 0.9rem;
+  font-weight: 700;
+  line-height: 1.4;
+  opacity: 1;
+  transition: opacity 260ms ease, transform 260ms ease;
+}
+
+.announcement-toast.hide {
+  opacity: 0;
+  transform: translate(-50%, -12px);
+}
+
 .app-window {
   width: min(1380px, 100%);
   height: calc(100vh - 24px);

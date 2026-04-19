@@ -33,6 +33,7 @@ document.addEventListener("DOMContentLoaded", () => {
     menuUserAvatar: $("menuUserAvatar"),
     menuUsername: $("menuUsername"),
     menuUserStatus: $("menuUserStatus"),
+    announcementToast: $("announcementToast"),
     statusMessage: $("statusMessage"),
     conversationList: $("conversationList"),
     userSearchInput: $("userSearchInput"),
@@ -109,6 +110,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const BOTTOM_GAP = 110;
   const MAX_IMG = 2 * 1024 * 1024;
   const GIF_DEFAULT = "funny";
+  let announcementHideTimer = null;
+  let announcementDismissTimer = null;
   let rtcConfig = {
     iceServers: [
       { urls: "stun:stun.l.google.com:19302" },
@@ -155,6 +158,33 @@ document.addEventListener("DOMContentLoaded", () => {
   const setStatus = (m, err) => {
     els.statusMessage.textContent = m || "";
     els.statusMessage.style.color = err ? "var(--danger)" : "var(--muted)";
+  };
+  const clearAnnouncementTimers = () => {
+    if (announcementHideTimer) {
+      clearTimeout(announcementHideTimer);
+      announcementHideTimer = null;
+    }
+    if (announcementDismissTimer) {
+      clearTimeout(announcementDismissTimer);
+      announcementDismissTimer = null;
+    }
+  };
+  const showAnnouncement = (message, durationMs = 5200) => {
+    if (!els.announcementToast || !message) {
+      return;
+    }
+
+    clearAnnouncementTimers();
+    els.announcementToast.textContent = message;
+    els.announcementToast.classList.remove("hidden", "hide");
+
+    announcementHideTimer = setTimeout(() => {
+      els.announcementToast.classList.add("hide");
+      announcementDismissTimer = setTimeout(() => {
+        els.announcementToast.classList.add("hidden");
+        els.announcementToast.classList.remove("hide");
+      }, 280);
+    }, Math.max(1500, Number(durationMs) || 5200));
   };
   const t = (v) => {
     const d = new Date(v);
@@ -1584,6 +1614,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     window.addEventListener("beforeunload", () => {
+      clearAnnouncementTimers();
       if (state.call.callId) {
         finishCall(true);
       }
@@ -1596,6 +1627,9 @@ document.addEventListener("DOMContentLoaded", () => {
     renderCurrentUser();
     buildEmojiPanel();
     setHeader();
+    showAnnouncement(
+      "Announcement from Leo: Screen sharing, group chat, and invites are coming by the end of April 27, 2026."
+    );
     resetCallUi();
     toggleChatMenu(false);
     await loadWebRtcConfig();
