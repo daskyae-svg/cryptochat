@@ -1595,7 +1595,10 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    const hasMedia = stream && (!requiresVideo || stream.getVideoTracks().length > 0);
+    const activeVideoTracks = stream
+      ? stream.getVideoTracks().filter((track) => track.readyState === "live")
+      : [];
+    const hasMedia = stream && (!requiresVideo || activeVideoTracks.length > 0);
     if (!hasMedia) {
       videoEl.srcObject = null;
       videoEl.classList.add("hidden");
@@ -1614,10 +1617,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function syncLocalVideoPreview() {
     const previewStream = state.call.screenSharing ? state.call.screenStream : state.call.localStream;
-    els.localVideoLabel.textContent = state.call.screenSharing ? "You • Sharing screen" : "You";
+    els.localVideoLabel.textContent = state.call.screenSharing ? "You - Sharing screen" : "Screen Share";
     els.localVideoFallback.textContent = state.call.screenSharing
       ? "Screen preview"
-      : "Camera preview";
+      : "Click Share Screen when you want to present.";
     updateVideoElement(els.localVideo, els.localVideoFallback, previewStream, true);
   }
 
@@ -1718,13 +1721,7 @@ document.addEventListener("DOMContentLoaded", () => {
       return state.call.localStream;
     }
 
-    const stream = await navigator.mediaDevices.getUserMedia({
-      audio: true,
-      video: {
-        width: { ideal: 1280 },
-        height: { ideal: 720 },
-      },
-    });
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
 
     stream.getAudioTracks().forEach((track) => {
       track.enabled = !state.call.muted;
@@ -1740,16 +1737,32 @@ document.addEventListener("DOMContentLoaded", () => {
       ...liveRtcConfig,
       iceServers: liveRtcConfig.iceServers,
     });
+    const videoTransceiver = pc.addTransceiver("video", {
+      direction: "sendrecv",
+    });
+    state.call.videoSender = videoTransceiver.sender;
 
     pc.ontrack = (event) => {
       console.log("RECEIVED TRACK");
 
-      if (event.streams && event.streams[0]) {
-        state.call.remoteStream = event.streams[0];
-      } else {
-        if (!state.call.remoteStream) {
-          state.call.remoteStream = new MediaStream();
-        }
+      event.track.onmute = () => {
+        syncRemoteMediaPreview();
+      };
+      event.track.onunmute = () => {
+        syncRemoteMediaPreview();
+      };
+      event.track.onended = () => {
+        syncRemoteMediaPreview();
+      };
+
+      if (!state.call.remoteStream) {
+        state.call.remoteStream = new MediaStream();
+      }
+
+      const hasTrack = state.call.remoteStream
+        .getTracks()
+        .some((track) => track.id === event.track.id);
+      if (!hasTrack) {
         state.call.remoteStream.addTrack(event.track);
       }
 
@@ -1848,22 +1861,15 @@ document.addEventListener("DOMContentLoaded", () => {
       track.enabled = !state.call.muted;
       pc.addTrack(track, stream);
     });
-    const [videoTrack] = stream.getVideoTracks();
-    if (videoTrack) {
-      state.call.videoSender = pc.addTrack(videoTrack, stream);
-    }
     syncLocalVideoPreview();
   }
 
-  async function revertToCameraTrack() {
-    const stream = await ensureLocalMediaStream();
-    const [cameraTrack] = stream.getVideoTracks();
-
-    if (!cameraTrack || !state.call.videoSender) {
-      throw new Error("Camera video track is unavailable.");
+  async function stopScreenShare() {
+    if (!state.call.videoSender) {
+      throw new Error("Screen sharing is not ready yet.");
     }
 
-    await state.call.videoSender.replaceTrack(cameraTrack);
+    await state.call.videoSender.replaceTrack(null);
 
     if (state.call.screenStream) {
       state.call.screenStream.getTracks().forEach((track) => {
@@ -1886,8 +1892,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
     try {
       if (state.call.screenSharing) {
-        await revertToCameraTrack();
-        setStatus("Returned to camera.", false);
+        await stopScreenShare();
+        setStatus("Screen sharing stopped.", false);
         return;
       }
 
@@ -1903,8 +1909,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
       screenTrack.onended = () => {
         if (state.call.screenSharing) {
-          revertToCameraTrack().catch((error) => {
-            setStatus(error.message || "Returned to camera.", false);
+          stopScreenShare().catch((error) => {
+            setStatus(error.message || "Screen sharing stopped.", false);
           });
         }
       };
