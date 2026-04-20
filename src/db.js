@@ -109,8 +109,46 @@ async function createTables() {
     );
   `;
 
+  const groupsTableSql = `
+    CREATE TABLE IF NOT EXISTS \`groups\` (
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      name VARCHAR(255) NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `;
+
+  const groupMembersTableSql = `
+    CREATE TABLE IF NOT EXISTS group_members (
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      group_id INT NOT NULL,
+      user_id INT NOT NULL,
+      CONSTRAINT fk_group_members_group FOREIGN KEY (group_id) REFERENCES \`groups\`(id) ON DELETE CASCADE,
+      CONSTRAINT fk_group_members_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      CONSTRAINT uq_group_members UNIQUE (group_id, user_id),
+      INDEX idx_group_members_user_group (user_id, group_id)
+    );
+  `;
+
+  const groupMessagesTableSql = `
+    CREATE TABLE IF NOT EXISTS group_messages (
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      group_id INT NOT NULL,
+      sender_id INT NOT NULL,
+      message_encrypted LONGTEXT NOT NULL,
+      iv VARCHAR(64) NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT fk_group_messages_group FOREIGN KEY (group_id) REFERENCES \`groups\`(id) ON DELETE CASCADE,
+      CONSTRAINT fk_group_messages_sender FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
+      INDEX idx_group_messages_group_created (group_id, created_at, id),
+      INDEX idx_group_messages_sender_created (sender_id, created_at, id)
+    );
+  `;
+
   await pool.query(usersTableSql);
   await pool.query(messagesTableSql);
+  await pool.query(groupsTableSql);
+  await pool.query(groupMembersTableSql);
+  await pool.query(groupMessagesTableSql);
   await ensureUserColumns();
   await ensureMessageColumns();
 }

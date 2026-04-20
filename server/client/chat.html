@@ -57,16 +57,21 @@
 
         <aside class="conversation-pane">
           <header class="conversation-pane-head">
-            <h1>Chats</h1>
-            <p id="currentUserLabel"></p>
+            <div class="conversation-title-row">
+              <div>
+                <h1>Chats</h1>
+                <p id="currentUserLabel"></p>
+              </div>
+              <button id="newGroupBtn" type="button" class="secondary-btn header-action-btn">New Group</button>
+            </div>
           </header>
 
           <label class="search-wrap" for="userSearchInput">
-            <span>Search users</span>
+            <span>Search chats and groups</span>
             <input
               id="userSearchInput"
               type="text"
-              placeholder="Search by username..."
+              placeholder="Search direct chats or groups..."
               autocomplete="off"
             />
           </label>
@@ -85,7 +90,7 @@
               </div>
             </div>
             <div class="chat-header-actions">
-              <button id="callToggleBtn" type="button" class="icon-btn call-btn" title="Voice call" aria-label="Voice call" disabled>
+              <button id="callToggleBtn" type="button" class="icon-btn call-btn" title="Start call" aria-label="Start call" disabled>
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M5.5 4.5a2 2 0 0 1 2.2-1.96l2.44.26a2 2 0 0 1 1.75 1.45l.5 1.8a2 2 0 0 1-.58 2.02L10.37 9.5a14.62 14.62 0 0 0 4.14 4.14l1.43-1.43a2 2 0 0 1 2.02-.58l1.8.5a2 2 0 0 1 1.45 1.75l.26 2.44a2 2 0 0 1-1.96 2.2h-1A15 15 0 0 1 4.5 5.5v-1z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
@@ -106,6 +111,7 @@
                       <p id="menuUserStatus" class="chat-menu-status">Offline</p>
                     </div>
                   </div>
+                  <div id="chatMenuExtra" class="chat-menu-extra"></div>
                 </section>
               </div>
             </div>
@@ -114,16 +120,31 @@
           <section id="messagesContainer" class="messages" aria-live="polite"></section>
 
           <section id="callDock" class="call-dock hidden">
-            <div class="call-dock-main">
-              <div id="callAvatar" class="avatar avatar-lg">?</div>
-              <div>
-                <p id="callLabel" class="call-label">Voice call</p>
-                <p id="callSubLabel" class="call-sub-label"></p>
+            <div class="call-dock-media">
+              <div class="call-video-panel remote-panel">
+                <video id="remoteVideo" autoplay playsinline></video>
+                <div id="remoteVideoFallback" class="call-video-fallback">Remote video will appear here.</div>
+                <span class="call-video-label">Remote</span>
+              </div>
+              <div class="call-video-panel local-panel">
+                <video id="localVideo" autoplay playsinline muted></video>
+                <div id="localVideoFallback" class="call-video-fallback">Camera preview</div>
+                <span id="localVideoLabel" class="call-video-label">You</span>
               </div>
             </div>
-            <div class="call-dock-actions">
-              <button id="muteCallBtn" type="button" class="secondary-btn">Mute</button>
-              <button id="endCallBtn" type="button" class="danger-btn">End</button>
+            <div class="call-dock-meta">
+              <div class="call-dock-main">
+                <div id="callAvatar" class="avatar avatar-lg">?</div>
+                <div>
+                  <p id="callLabel" class="call-label">Call</p>
+                  <p id="callSubLabel" class="call-sub-label"></p>
+                </div>
+              </div>
+              <div class="call-dock-actions">
+                <button id="shareScreenBtn" type="button" class="secondary-btn">Share Screen</button>
+                <button id="muteCallBtn" type="button" class="secondary-btn">Mute</button>
+                <button id="endCallBtn" type="button" class="danger-btn">End</button>
+              </div>
             </div>
           </section>
 
@@ -223,11 +244,50 @@
 
     <section id="incomingCallModal" class="call-modal hidden" role="dialog" aria-modal="true" aria-label="Incoming call">
       <div class="call-modal-card">
-        <p class="call-modal-title">Incoming voice call</p>
+        <p class="call-modal-title">Incoming call</p>
         <p id="incomingCallLabel" class="call-modal-label"></p>
         <div class="call-modal-actions">
           <button id="rejectCallBtn" type="button" class="danger-btn">Decline</button>
           <button id="acceptCallBtn" type="button" class="secondary-btn">Answer</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="groupModal" class="call-modal hidden" role="dialog" aria-modal="true" aria-label="Group editor">
+      <div class="call-modal-card group-modal-card">
+        <div class="group-modal-head">
+          <div>
+            <p id="groupModalTitle" class="call-modal-title">Create Group</p>
+            <p id="groupModalSubtitle" class="call-modal-label">Choose members for your new conversation.</p>
+          </div>
+          <button id="closeGroupModalBtn" type="button" class="icon-btn settings-close-btn" aria-label="Close group dialog">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M18 6L6 18M6 6l12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+          </button>
+        </div>
+
+        <label id="groupNameField" class="search-wrap group-name-field" for="groupNameInput">
+          <span>Group name</span>
+          <input
+            id="groupNameInput"
+            type="text"
+            maxlength="80"
+            placeholder="Weekend traders"
+            autocomplete="off"
+          />
+        </label>
+
+        <div class="group-member-picker">
+          <p id="groupModalHint" class="group-picker-hint">Select at least one person.</p>
+          <div id="groupMemberOptions" class="group-member-options" tabindex="-1"></div>
+        </div>
+
+        <p id="groupModalStatus" class="status"></p>
+
+        <div class="call-modal-actions">
+          <button id="cancelGroupBtn" type="button" class="secondary-btn">Cancel</button>
+          <button id="saveGroupBtn" type="button" class="danger-btn">Create Group</button>
         </div>
       </div>
     </section>

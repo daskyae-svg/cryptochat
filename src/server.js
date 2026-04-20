@@ -76,6 +76,8 @@ const ICE_TRANSPORT_POLICY = String(process.env.ICE_TRANSPORT_POLICY || "all")
 const ICE_CANDIDATE_POOL_SIZE = Number(process.env.ICE_CANDIDATE_POOL_SIZE || 4);
 const MAX_MEDIA_URL_LENGTH = 2_500_000;
 const MAX_MESSAGE_LENGTH = 3000;
+const MAX_GROUP_NAME_LENGTH = 80;
+const MIN_GROUP_MEMBER_COUNT = 2;
 
 const primaryClientDir = path.resolve(__dirname, "..", "server", "client");
 const fallbackClientDir = path.resolve(__dirname, "..", "client");
@@ -176,12 +178,43 @@ function validateUsername(username) {
   return null;
 }
 
+function normalizeGroupName(rawValue) {
+  return String(rawValue || "").trim();
+}
+
+function validateGroupName(groupName) {
+  if (!groupName) {
+    return "Group name is required.";
+  }
+  if (groupName.length < 2) {
+    return "Group name must be at least 2 characters long.";
+  }
+  if (groupName.length > MAX_GROUP_NAME_LENGTH) {
+    return `Group name must be less than or equal to ${MAX_GROUP_NAME_LENGTH} characters.`;
+  }
+  return null;
+}
+
 function normalizeMessageType(rawType) {
   const type = String(rawType || MESSAGE_TYPES.TEXT).toLowerCase().trim();
   if (!ALL_DB_TYPES.has(type)) {
     return MESSAGE_TYPES.TEXT;
   }
   return type;
+}
+
+function uniquePositiveInts(values) {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+
+  return Array.from(
+    new Set(
+      values
+        .map((value) => toPositiveInt(value))
+        .filter(Boolean)
+    )
+  );
 }
 
 function isUserOnline(userId) {
@@ -222,6 +255,35 @@ function messagePreviewFromType(messageType, messageText) {
     return messageText ? `GIF: ${toPreviewText(messageText, 36)}` : "GIF";
   }
   return toPreviewText(messageText, 45);
+}
+
+function encodeGroupMessagePayload({ messageText, messageType, mediaUrl }) {
+  return JSON.stringify({
+    message: String(messageText || ""),
+    messageType: normalizeMessageType(messageType),
+    mediaUrl: mediaUrl || null,
+  });
+}
+
+function decodeGroupMessagePayload(rawPayload) {
+  try {
+    const parsed = JSON.parse(String(rawPayload || ""));
+    if (!parsed || typeof parsed !== "object") {
+      throw new Error("Invalid group message payload.");
+    }
+
+    return {
+      message: String(parsed.message || ""),
+      messageType: normalizeMessageType(parsed.messageType || MESSAGE_TYPES.TEXT),
+      mediaUrl: parsed.mediaUrl ? String(parsed.mediaUrl) : null,
+    };
+  } catch (_error) {
+    return {
+      message: String(rawPayload || ""),
+      messageType: MESSAGE_TYPES.TEXT,
+      mediaUrl: null,
+    };
+  }
 }
 
 function parseUrlList(rawValue) {
@@ -448,6 +510,284 @@ function mapMessageRow(row, currentUserId) {
   return message;
 }
 
+function mapGroupMessageRow(row, currentUserId) {
+  const decodedPayload = decodeGroupMessagePayload(
+    safeDecrypt(row.message_encrypted, row.iv)
+  );
+
+  return {
+    id: row.id,
+    groupId: row.group_id,
+    senderId: row.sender_id,
+    senderUsername: row.sender_username || null,
+    senderAvatarUrl: row.sender_avatar_url || null,
+    messageType: decodedPayload.messageType,
+    message: decodedPayload.message,
+    mediaUrl: decodedPayload.mediaUrl || null,
+    createdAt: toIsoString(row.created_at),
+    status: row.sender_id === currentUserId ? "sent" : null,
+  };
+}
+
+function groupConversationPreview(message, currentUserId) {
+  if (!message) {
+    return "No messages yet";
+  }
+
+  const authorLabel =
+    message.senderId === currentUserId
+      ? "You"
+      : message.senderUsername || `User ${message.senderId}`;
+
+  return `${authorLabel}: ${messagePreviewFromType(message.messageType, message.message)}`;
+}
+
+function getGroupRoomName(groupId) {
+  return `group_${groupId}`;
+}
+
+async function findUsersByIds(userIds) {
+  const safeUserIds = uniquePositiveInts(userIds);
+  if (!safeUserIds.length) {
+    return [];
+  }
+
+  const db = getDb();
+  const placeholders = safeUserIds.map(() => "?").join(", ");
+  const [rows] = await db.execute(
+    `
+    SELECT id, username, avatar_url
+    FROM users
+    WHERE id IN (${placeholders})
+    ORDER BY username ASC
+    `,
+    safeUserIds
+  );
+
+  return rows;
+}
+
+async function findGroupById(groupId) {
+  const db = getDb();
+  const [rows] = await db.execute(
+    `
+    SELECT id, name, created_at
+    FROM \`groups\`
+    WHERE id = ?
+    LIMIT 1
+    `,
+    [groupId]
+  );
+
+  return rows[0] || null;
+}
+
+async function isGroupMember(groupId, userId) {
+  const db = getDb();
+  const [rows] = await db.execute(
+    `
+    SELECT 1
+    FROM group_members
+    WHERE group_id = ? AND user_id = ?
+    LIMIT 1
+    `,
+    [groupId, userId]
+  );
+
+  return rows.length > 0;
+}
+
+async function ensureGroupMembership(groupId, userId) {
+  const group = await findGroupById(groupId);
+  if (!group) {
+    throw createHttpError(404, "Group not found.");
+  }
+
+  const member = await isGroupMember(groupId, userId);
+  if (!member) {
+    throw createHttpError(403, "You are not a member of this group.");
+  }
+
+  return group;
+}
+
+async function listGroupIdsForUser(userId) {
+  const db = getDb();
+  const [rows] = await db.execute(
+    `
+    SELECT group_id
+    FROM group_members
+    WHERE user_id = ?
+    `,
+    [userId]
+  );
+
+  return rows.map((row) => row.group_id);
+}
+
+async function joinSocketToUserGroups(socket, userId) {
+  const groupIds = await listGroupIdsForUser(userId);
+  for (const groupId of groupIds) {
+    await socket.join(getGroupRoomName(groupId));
+  }
+}
+
+async function joinUserSocketsToGroup(userId, groupId) {
+  const sockets = onlineUsers.get(String(userId));
+  if (!sockets || !sockets.size) {
+    return;
+  }
+
+  const roomName = getGroupRoomName(groupId);
+  await Promise.all(
+    Array.from(sockets).map(async (socketId) => {
+      const activeSocket = io.sockets.sockets.get(socketId);
+      if (activeSocket) {
+        await activeSocket.join(roomName);
+      }
+    })
+  );
+}
+
+async function getGroupMembers(groupId) {
+  const db = getDb();
+  const [rows] = await db.execute(
+    `
+    SELECT u.id, u.username, u.avatar_url
+    FROM group_members gm
+    INNER JOIN users u ON u.id = gm.user_id
+    WHERE gm.group_id = ?
+    ORDER BY u.username ASC
+    `,
+    [groupId]
+  );
+
+  return rows.map((row) => ({
+    id: row.id,
+    username: row.username,
+    avatarUrl: row.avatar_url || null,
+    online: isUserOnline(row.id),
+  }));
+}
+
+async function getGroupsForUser(userId, specificGroupId = null) {
+  const db = getDb();
+  const params = [userId];
+  let groupFilterSql = "";
+
+  if (specificGroupId) {
+    groupFilterSql = " AND g.id = ? ";
+    params.push(specificGroupId);
+  }
+
+  const [rows] = await db.execute(
+    `
+    SELECT
+      g.id AS group_id,
+      g.name,
+      g.created_at AS group_created_at,
+      gm_latest.id AS message_id,
+      gm_latest.group_id,
+      gm_latest.sender_id,
+      gm_latest.message_encrypted,
+      gm_latest.iv,
+      gm_latest.created_at AS created_at,
+      sender.username AS sender_username,
+      sender.avatar_url AS sender_avatar_url
+    FROM \`groups\` g
+    INNER JOIN group_members member_scope
+      ON member_scope.group_id = g.id
+     AND member_scope.user_id = ?
+    LEFT JOIN group_messages gm_latest
+      ON gm_latest.id = (
+        SELECT gm2.id
+        FROM group_messages gm2
+        WHERE gm2.group_id = g.id
+        ORDER BY gm2.created_at DESC, gm2.id DESC
+        LIMIT 1
+      )
+    LEFT JOIN users sender ON sender.id = gm_latest.sender_id
+    WHERE 1 = 1
+    ${groupFilterSql}
+    ORDER BY
+      CASE WHEN gm_latest.created_at IS NULL THEN 1 ELSE 0 END ASC,
+      gm_latest.created_at DESC,
+      g.name ASC
+    `,
+    params
+  );
+
+  if (!rows.length) {
+    return [];
+  }
+
+  const groupIds = rows.map((row) => row.group_id);
+  const placeholders = groupIds.map(() => "?").join(", ");
+  const [memberRows] = await db.execute(
+    `
+    SELECT gm.group_id, u.id, u.username, u.avatar_url
+    FROM group_members gm
+    INNER JOIN users u ON u.id = gm.user_id
+    WHERE gm.group_id IN (${placeholders})
+    ORDER BY u.username ASC
+    `,
+    groupIds
+  );
+
+  const membersByGroupId = new Map();
+  memberRows.forEach((row) => {
+    const currentMembers = membersByGroupId.get(row.group_id) || [];
+    currentMembers.push({
+      id: row.id,
+      username: row.username,
+      avatarUrl: row.avatar_url || null,
+      online: isUserOnline(row.id),
+    });
+    membersByGroupId.set(row.group_id, currentMembers);
+  });
+
+  return rows.map((row) => {
+    const mappedMessage = row.message_id
+      ? mapGroupMessageRow(
+          {
+            id: row.message_id,
+            group_id: row.group_id,
+            sender_id: row.sender_id,
+            message_encrypted: row.message_encrypted,
+            iv: row.iv,
+            created_at: row.created_at,
+            sender_username: row.sender_username,
+            sender_avatar_url: row.sender_avatar_url,
+          },
+          userId
+        )
+      : null;
+
+    return {
+      id: row.group_id,
+      name: row.name,
+      createdAt: toIsoString(row.group_created_at),
+      members: membersByGroupId.get(row.group_id) || [],
+      lastMessage: mappedMessage
+        ? {
+            id: mappedMessage.id,
+            groupId: mappedMessage.groupId,
+            senderId: mappedMessage.senderId,
+            senderUsername: mappedMessage.senderUsername,
+            messageType: mappedMessage.messageType,
+            preview: groupConversationPreview(mappedMessage, userId),
+            createdAt: mappedMessage.createdAt,
+          }
+        : null,
+    };
+  });
+}
+
+async function getGroupSummary(groupId, userId) {
+  const groups = await getGroupsForUser(userId, groupId);
+  return groups[0] || null;
+}
+
 async function findUserById(userId) {
   const db = getDb();
   const [rows] = await db.execute(
@@ -496,6 +836,52 @@ async function persistEncryptedMessage({
   );
 
   return mapMessageRow(rows[0]);
+}
+
+async function persistEncryptedGroupMessage({
+  groupId,
+  senderId,
+  messageText,
+  messageType,
+  mediaUrl,
+}) {
+  const db = getDb();
+  const safeMessageType = normalizeMessageType(messageType);
+  const payload = encodeGroupMessagePayload({
+    messageText,
+    messageType: safeMessageType,
+    mediaUrl,
+  });
+  const { encryptedMessage, iv } = encryptMessage(payload);
+
+  const [result] = await db.execute(
+    `
+    INSERT INTO group_messages (group_id, sender_id, message_encrypted, iv)
+    VALUES (?, ?, ?, ?)
+    `,
+    [groupId, senderId, encryptedMessage, iv]
+  );
+
+  const [rows] = await db.execute(
+    `
+    SELECT
+      gm.id,
+      gm.group_id,
+      gm.sender_id,
+      gm.message_encrypted,
+      gm.iv,
+      gm.created_at,
+      u.username AS sender_username,
+      u.avatar_url AS sender_avatar_url
+    FROM group_messages gm
+    INNER JOIN users u ON u.id = gm.sender_id
+    WHERE gm.id = ?
+    LIMIT 1
+    `,
+    [result.insertId]
+  );
+
+  return mapGroupMessageRow(rows[0], senderId);
 }
 
 async function markMessageDeleted(messageId, requesterId) {
@@ -557,6 +943,20 @@ async function markMessageDeleted(messageId, requesterId) {
   };
 }
 
+async function buildGroupRealtimePayload(groupId) {
+  const group = await findGroupById(groupId);
+  if (!group) {
+    return null;
+  }
+
+  return {
+    id: group.id,
+    name: group.name,
+    createdAt: toIsoString(group.created_at),
+    members: await getGroupMembers(groupId),
+  };
+}
+
 function emitToUser(userId, eventName, payload) {
   const userKey = String(userId);
   const sockets = onlineUsers.get(userKey);
@@ -567,6 +967,20 @@ function emitToUser(userId, eventName, payload) {
   sockets.forEach((socketId) => {
     io.to(socketId).emit(eventName, payload);
   });
+}
+
+async function emitGroupUpdate(groupId) {
+  const payload = await buildGroupRealtimePayload(groupId);
+  if (!payload) {
+    return null;
+  }
+
+  await Promise.all(
+    payload.members.map((member) => joinUserSocketsToGroup(member.id, groupId))
+  );
+
+  io.to(getGroupRoomName(groupId)).emit("group_updated", payload);
+  return payload;
 }
 
 function emitPresenceUpdate(userId, online) {
@@ -933,6 +1347,191 @@ app.get("/conversations", async (req, res) => {
   }
 });
 
+app.post("/groups", async (req, res) => {
+  try {
+    const creatorId = toPositiveInt(req.body.userId);
+    const groupName = normalizeGroupName(req.body.name);
+    const requestedMemberIds = uniquePositiveInts(req.body.memberIds);
+
+    if (!creatorId) {
+      return res.status(400).json({ error: "Valid userId is required." });
+    }
+
+    const groupNameValidationError = validateGroupName(groupName);
+    if (groupNameValidationError) {
+      return res.status(400).json({ error: groupNameValidationError });
+    }
+
+    const memberIds = uniquePositiveInts([creatorId, ...requestedMemberIds]);
+    if (memberIds.length < MIN_GROUP_MEMBER_COUNT) {
+      return res.status(400).json({
+        error: "Select at least one additional user to create a group.",
+      });
+    }
+
+    const users = await findUsersByIds(memberIds);
+    if (users.length !== memberIds.length) {
+      return res.status(404).json({ error: "One or more selected users do not exist." });
+    }
+
+    const db = getDb();
+    const connection = await db.getConnection();
+    let groupId = null;
+
+    try {
+      await connection.beginTransaction();
+
+      const [groupResult] = await connection.execute(
+        `
+        INSERT INTO \`groups\` (name)
+        VALUES (?)
+        `,
+        [groupName]
+      );
+
+      groupId = groupResult.insertId;
+      const valuesSql = memberIds.map(() => "(?, ?)").join(", ");
+      const values = memberIds.flatMap((memberId) => [groupId, memberId]);
+
+      await connection.execute(
+        `
+        INSERT INTO group_members (group_id, user_id)
+        VALUES ${valuesSql}
+        `,
+        values
+      );
+
+      await connection.commit();
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+
+    await Promise.all(memberIds.map((memberId) => joinUserSocketsToGroup(memberId, groupId)));
+    await emitGroupUpdate(groupId);
+    const group = await getGroupSummary(groupId, creatorId);
+
+    return res.status(201).json({
+      message: "Group created.",
+      group,
+    });
+  } catch (error) {
+    console.error("[groups:create] failed:", error);
+    return res.status(500).json({ error: "Failed to create group." });
+  }
+});
+
+app.get("/groups", async (req, res) => {
+  try {
+    const userId = toPositiveInt(req.query.userId);
+    if (!userId) {
+      return res.status(400).json({ error: "Valid userId query param is required." });
+    }
+
+    const groups = await getGroupsForUser(userId);
+    return res.json({ groups });
+  } catch (error) {
+    console.error("[groups:list] failed:", error);
+    return res.status(500).json({ error: "Failed to load groups." });
+  }
+});
+
+app.post("/groups/:id/add-user", async (req, res) => {
+  try {
+    const groupId = toPositiveInt(req.params.id);
+    const requesterId = toPositiveInt(req.body.requesterId);
+    const newUserId = toPositiveInt(req.body.newUserId ?? req.body.userId);
+
+    if (!groupId || !requesterId || !newUserId) {
+      return res.status(400).json({
+        error: "Valid group id, requesterId, and newUserId are required.",
+      });
+    }
+
+    await ensureGroupMembership(groupId, requesterId);
+
+    const user = await findUserById(newUserId);
+    if (!user) {
+      return res.status(404).json({ error: "User not found." });
+    }
+
+    const alreadyMember = await isGroupMember(groupId, newUserId);
+    if (alreadyMember) {
+      return res.status(409).json({ error: "That user is already in the group." });
+    }
+
+    const db = getDb();
+    await db.execute(
+      `
+      INSERT INTO group_members (group_id, user_id)
+      VALUES (?, ?)
+      `,
+      [groupId, newUserId]
+    );
+
+    await joinUserSocketsToGroup(newUserId, groupId);
+    await emitGroupUpdate(groupId);
+    const group = await getGroupSummary(groupId, requesterId);
+
+    return res.status(201).json({
+      message: "User added to group.",
+      group,
+    });
+  } catch (error) {
+    const status = error.status || 500;
+    if (status >= 500) {
+      console.error("[groups:add-user] failed:", error);
+    }
+    return res.status(status).json({ error: error.message || "Failed to add user to group." });
+  }
+});
+
+app.get("/groups/:id/messages", async (req, res) => {
+  try {
+    const groupId = toPositiveInt(req.params.id);
+    const userId = toPositiveInt(req.query.userId);
+
+    if (!groupId || !userId) {
+      return res.status(400).json({
+        error: "Valid group id path param and userId query param are required.",
+      });
+    }
+
+    await ensureGroupMembership(groupId, userId);
+
+    const db = getDb();
+    const [rows] = await db.execute(
+      `
+      SELECT
+        gm.id,
+        gm.group_id,
+        gm.sender_id,
+        gm.message_encrypted,
+        gm.iv,
+        gm.created_at,
+        u.username AS sender_username,
+        u.avatar_url AS sender_avatar_url
+      FROM group_messages gm
+      INNER JOIN users u ON u.id = gm.sender_id
+      WHERE gm.group_id = ?
+      ORDER BY gm.created_at ASC, gm.id ASC
+      `,
+      [groupId]
+    );
+
+    const messages = rows.map((row) => mapGroupMessageRow(row, userId));
+    return res.json({ messages });
+  } catch (error) {
+    const status = error.status || 500;
+    if (status >= 500) {
+      console.error("[groups:messages] failed:", error);
+    }
+    return res.status(status).json({ error: error.message || "Failed to load group messages." });
+  }
+});
+
 app.post("/send-message", async (req, res) => {
   try {
     const senderId = toPositiveInt(req.body.senderId);
@@ -1184,7 +1783,7 @@ app.get("/gifs/search", async (req, res) => {
 });
 
 io.on("connection", (socket) => {
-  socket.on("register", (payload) => {
+  socket.on("register", async (payload) => {
     const rawUserId =
       payload && typeof payload === "object" ? payload.userId : payload;
     const userId = toPositiveInt(rawUserId);
@@ -1198,6 +1797,13 @@ io.on("connection", (socket) => {
       if (becameOffline) {
         emitPresenceUpdate(previousUserId, false);
       }
+
+      const joinedGroupRooms = Array.from(socket.rooms).filter((roomName) =>
+        roomName.startsWith("group_")
+      );
+      for (const roomName of joinedGroupRooms) {
+        await socket.leave(roomName);
+      }
     }
 
     const wasOnline = isUserOnline(userId);
@@ -1208,6 +1814,12 @@ io.on("connection", (socket) => {
     }
     onlineUsers.get(userKey).add(socket.id);
     socket.data.userId = userId;
+
+    try {
+      await joinSocketToUserGroups(socket, userId);
+    } catch (error) {
+      console.error("[socket register] failed to join group rooms:", error);
+    }
 
     if (!wasOnline) {
       emitPresenceUpdate(userId, true);
@@ -1244,6 +1856,60 @@ io.on("connection", (socket) => {
     }
 
     emitToUser(receiverId, "stop_typing", { senderId, receiverId });
+  });
+
+  socket.on("group_typing", async (payload) => {
+    try {
+      const senderId = toPositiveInt(payload && payload.senderId);
+      const groupId = toPositiveInt(payload && payload.groupId);
+      const registeredUserId = toPositiveInt(socket.data.userId);
+
+      if (!senderId || !groupId) {
+        return;
+      }
+      if (registeredUserId && senderId !== registeredUserId) {
+        return;
+      }
+
+      const member = await isGroupMember(groupId, senderId);
+      if (!member) {
+        return;
+      }
+
+      socket.to(getGroupRoomName(groupId)).emit("group_typing", {
+        groupId,
+        senderId,
+      });
+    } catch (error) {
+      console.error("[socket group_typing] failed:", error);
+    }
+  });
+
+  socket.on("group_stop_typing", async (payload) => {
+    try {
+      const senderId = toPositiveInt(payload && payload.senderId);
+      const groupId = toPositiveInt(payload && payload.groupId);
+      const registeredUserId = toPositiveInt(socket.data.userId);
+
+      if (!senderId || !groupId) {
+        return;
+      }
+      if (registeredUserId && senderId !== registeredUserId) {
+        return;
+      }
+
+      const member = await isGroupMember(groupId, senderId);
+      if (!member) {
+        return;
+      }
+
+      socket.to(getGroupRoomName(groupId)).emit("group_stop_typing", {
+        groupId,
+        senderId,
+      });
+    } catch (error) {
+      console.error("[socket group_stop_typing] failed:", error);
+    }
   });
 
   socket.on("send_message", async (payload, callback) => {
@@ -1323,6 +1989,74 @@ io.on("connection", (socket) => {
       const errorMessage = error.message || "Failed to send message.";
       if ((error.status || 500) >= 500) {
         console.error("[socket send_message] failed:", error);
+      }
+
+      if (typeof callback === "function") {
+        callback({ ok: false, error: errorMessage });
+      }
+    }
+  });
+
+  socket.on("send_group_message", async (payload, callback) => {
+    try {
+      const groupId = toPositiveInt(payload && payload.groupId);
+      const senderId = toPositiveInt(payload && payload.senderId);
+      const messageType = normalizeMessageType(
+        payload && payload.messageType ? payload.messageType : MESSAGE_TYPES.TEXT
+      );
+      const message = String((payload && payload.message) || "");
+      const mediaUrl =
+        payload && payload.mediaUrl !== undefined && payload.mediaUrl !== null
+          ? String(payload.mediaUrl).trim()
+          : null;
+      const registeredUserId = toPositiveInt(socket.data.userId);
+
+      if (!groupId || !senderId) {
+        throw createHttpError(400, "groupId and senderId are required.");
+      }
+      if (registeredUserId && senderId !== registeredUserId) {
+        throw createHttpError(403, "Invalid sender identity.");
+      }
+      if (!ALLOWED_OUTGOING_TYPES.has(messageType)) {
+        throw createHttpError(400, "Invalid message type.");
+      }
+      if (message.length > MAX_MESSAGE_LENGTH) {
+        throw createHttpError(400, `Message exceeds ${MAX_MESSAGE_LENGTH} characters.`);
+      }
+      if (messageType === MESSAGE_TYPES.TEXT && !message.trim()) {
+        throw createHttpError(400, "Text message cannot be empty.");
+      }
+      if ((messageType === MESSAGE_TYPES.IMAGE || messageType === MESSAGE_TYPES.GIF) && !mediaUrl) {
+        throw createHttpError(400, "mediaUrl is required for image/gif messages.");
+      }
+      if (mediaUrl && mediaUrl.length > MAX_MEDIA_URL_LENGTH) {
+        throw createHttpError(400, "Media payload is too large.");
+      }
+
+      await ensureGroupMembership(groupId, senderId);
+      await socket.join(getGroupRoomName(groupId));
+
+      const savedMessage = await persistEncryptedGroupMessage({
+        groupId,
+        senderId,
+        messageText: message,
+        messageType,
+        mediaUrl,
+      });
+
+      io.to(getGroupRoomName(groupId)).emit("receive_group_message", savedMessage);
+      socket.to(getGroupRoomName(groupId)).emit("group_stop_typing", {
+        groupId,
+        senderId,
+      });
+
+      if (typeof callback === "function") {
+        callback({ ok: true, message: savedMessage });
+      }
+    } catch (error) {
+      const errorMessage = error.message || "Failed to send group message.";
+      if ((error.status || 500) >= 500) {
+        console.error("[socket send_group_message] failed:", error);
       }
 
       if (typeof callback === "function") {

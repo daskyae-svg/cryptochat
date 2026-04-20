@@ -6,6 +6,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   const $ = (id) => document.getElementById(id);
+  const CHAT = { DIRECT: "direct", GROUP: "group" };
   const MSG = { TEXT: "text", IMAGE: "image", GIF: "gif", DELETED: "deleted" };
   const CALL = { IDLE: "idle", DIALING: "dialing", CONNECTING: "connecting", ACTIVE: "active" };
   const EMOJIS = [
@@ -33,10 +34,12 @@ document.addEventListener("DOMContentLoaded", () => {
     menuUserAvatar: $("menuUserAvatar"),
     menuUsername: $("menuUsername"),
     menuUserStatus: $("menuUserStatus"),
+    chatMenuExtra: $("chatMenuExtra"),
     announcementToast: $("announcementToast"),
     statusMessage: $("statusMessage"),
     conversationList: $("conversationList"),
     userSearchInput: $("userSearchInput"),
+    newGroupBtn: $("newGroupBtn"),
     messagesContainer: $("messagesContainer"),
     messageForm: $("messageForm"),
     messageInput: $("messageInput"),
@@ -69,35 +72,66 @@ document.addEventListener("DOMContentLoaded", () => {
     callAvatar: $("callAvatar"),
     callLabel: $("callLabel"),
     callSubLabel: $("callSubLabel"),
+    shareScreenBtn: $("shareScreenBtn"),
     muteCallBtn: $("muteCallBtn"),
     endCallBtn: $("endCallBtn"),
+    localVideo: $("localVideo"),
+    localVideoFallback: $("localVideoFallback"),
+    localVideoLabel: $("localVideoLabel"),
+    remoteVideo: $("remoteVideo"),
+    remoteVideoFallback: $("remoteVideoFallback"),
     incomingCallModal: $("incomingCallModal"),
     incomingCallLabel: $("incomingCallLabel"),
     acceptCallBtn: $("acceptCallBtn"),
     rejectCallBtn: $("rejectCallBtn"),
+    groupModal: $("groupModal"),
+    groupModalTitle: $("groupModalTitle"),
+    groupModalSubtitle: $("groupModalSubtitle"),
+    groupNameField: $("groupNameField"),
+    groupNameInput: $("groupNameInput"),
+    groupMemberOptions: $("groupMemberOptions"),
+    groupModalHint: $("groupModalHint"),
+    groupModalStatus: $("groupModalStatus"),
+    saveGroupBtn: $("saveGroupBtn"),
+    cancelGroupBtn: $("cancelGroupBtn"),
+    closeGroupModalBtn: $("closeGroupModalBtn"),
     remoteAudio: $("remoteAudio"),
   };
 
   const state = {
     conversations: [],
+    groups: [],
+    selectedChatKind: null,
     selectedUserId: null,
+    selectedGroupId: null,
     selectedUsername: "",
     selectedAvatarUrl: null,
     messageNodes: new Map(),
     messageStatus: new Map(),
     unread: new Set(),
+    unreadGroups: new Set(),
     typingUsers: new Set(),
+    typingGroups: new Map(),
     userMap: new Map(),
-    typingSent: false,
+    typingSentContext: null,
     typingTimer: null,
     gifTimer: null,
+    groupEditor: {
+      mode: "create",
+      groupId: null,
+      selectedUserIds: new Set(),
+    },
     call: {
       status: CALL.IDLE,
       callId: null,
       peerUserId: null,
       peerConnection: null,
       localStream: null,
+      screenStream: null,
+      remoteStream: null,
+      videoSender: null,
       muted: false,
+      screenSharing: false,
       hasRelayCandidate: false,
       pendingIncoming: null,
       pendingRemoteCandidates: [],
@@ -215,11 +249,138 @@ document.addEventListener("DOMContentLoaded", () => {
     els.messagesContainer.scrollTop = els.messagesContainer.scrollHeight;
   };
 
+  const isDirectChatSelected = () =>
+    state.selectedChatKind === CHAT.DIRECT && Boolean(state.selectedUserId);
+  const isGroupChatSelected = () =>
+    state.selectedChatKind === CHAT.GROUP && Boolean(state.selectedGroupId);
+  const hasSelectedChat = () => isDirectChatSelected() || isGroupChatSelected();
+
+  function getSelectedGroup() {
+    return state.groups.find((group) => group.id === state.selectedGroupId) || null;
+  }
+
+  function getSelectedChat() {
+    return isGroupChatSelected() ? getSelectedGroup() : getSelectedConversation();
+  }
+
+  function getGroupTypingSet(groupId) {
+    if (!state.typingGroups.has(groupId)) {
+      state.typingGroups.set(groupId, new Set());
+    }
+    return state.typingGroups.get(groupId);
+  }
+
+  function clearGroupTyping(groupId, userId) {
+    const typingSet = state.typingGroups.get(groupId);
+    if (!typingSet) {
+      return;
+    }
+
+    if (userId) {
+      typingSet.delete(userId);
+    }
+
+    if (!typingSet.size || !userId) {
+      state.typingGroups.delete(groupId);
+    }
+  }
+
+  function getGroupTypingLabel(group) {
+    if (!group) {
+      return "";
+    }
+
+    const typingSet = state.typingGroups.get(group.id);
+    if (!typingSet || !typingSet.size) {
+      return "";
+    }
+
+    const typingNames = Array.from(typingSet)
+      .map((userId) => {
+        const member = (group.members || []).find((item) => item.id === userId);
+        const user = state.userMap.get(userId);
+        return (member && member.username) || (user && user.username) || `User ${userId}`;
+      })
+      .filter(Boolean);
+
+    if (!typingNames.length) {
+      return "";
+    }
+    if (typingNames.length === 1) {
+      return `${typingNames[0]} is typing`;
+    }
+    if (typingNames.length === 2) {
+      return `${typingNames[0]} and ${typingNames[1]} are typing`;
+    }
+    return `${typingNames.length} people are typing`;
+  }
+
   function toggleChatMenu(show) {
     els.chatMenuPanel.classList.toggle("hidden", !show);
   }
 
   function renderChatMenu() {
+    els.chatMenuExtra.innerHTML = "";
+
+    if (isGroupChatSelected()) {
+      const selectedGroup = getSelectedGroup();
+      if (!selectedGroup) {
+        paintAvatar(els.menuUserAvatar, "?", null);
+        els.menuUsername.textContent = "No conversation selected";
+        els.menuUserStatus.textContent = "";
+        els.menuUserStatus.style.color = "var(--muted)";
+        return;
+      }
+
+      paintAvatar(els.menuUserAvatar, selectedGroup.name, null);
+      els.menuUsername.textContent = selectedGroup.name;
+      els.menuUserStatus.textContent = `${selectedGroup.members.length} members`;
+      els.menuUserStatus.style.color = "var(--muted)";
+
+      const addMemberBtn = document.createElement("button");
+      addMemberBtn.type = "button";
+      addMemberBtn.className = "secondary-btn";
+      addMemberBtn.textContent = "Add Members";
+      addMemberBtn.addEventListener("click", () => {
+        toggleChatMenu(false);
+        openGroupEditor("add", selectedGroup.id);
+      });
+
+      const heading = document.createElement("p");
+      heading.className = "chat-menu-heading";
+      heading.textContent = "Members";
+
+      const membersWrap = document.createElement("div");
+      membersWrap.className = "chat-menu-members";
+
+      (selectedGroup.members || []).forEach((member) => {
+        const row = document.createElement("div");
+        row.className = "chat-menu-member";
+
+        const avatar = document.createElement("div");
+        avatar.className = "avatar";
+        paintAvatar(avatar, member.username, member.avatarUrl);
+
+        const meta = document.createElement("div");
+        meta.className = "chat-menu-member-meta";
+
+        const name = document.createElement("p");
+        name.className = "chat-menu-member-name";
+        name.textContent = member.id === currentUser.id ? `${member.username} (You)` : member.username;
+
+        const status = document.createElement("p");
+        status.className = "chat-menu-member-status";
+        status.textContent = member.online ? "Online" : "Offline";
+
+        meta.append(name, status);
+        row.append(avatar, meta);
+        membersWrap.appendChild(row);
+      });
+
+      els.chatMenuExtra.append(addMemberBtn, heading, membersWrap);
+      return;
+    }
+
     const selected = getSelectedConversation();
     if (!selected) {
       paintAvatar(els.menuUserAvatar, "?", null);
@@ -234,15 +395,30 @@ document.addEventListener("DOMContentLoaded", () => {
     els.menuUserStatus.textContent = selected.online ? "Online" : "Offline";
     els.menuUserStatus.style.color = selected.online ? "#15814a" : "var(--muted)";
   }
-  const isOpenConv = (m) =>
-    state.selectedUserId &&
+  const isOpenDirectMessage = (m) =>
+    isDirectChatSelected() &&
     ((m.senderId === currentUser.id && m.receiverId === state.selectedUserId) ||
       (m.senderId === state.selectedUserId && m.receiverId === currentUser.id));
+  const isOpenGroupMessage = (m) =>
+    isGroupChatSelected() && Number(m && m.groupId) === Number(state.selectedGroupId);
+  const isOpenConv = (m) => isOpenDirectMessage(m) || isOpenGroupMessage(m);
   const preview = (type, text) => {
     if (type === MSG.DELETED) return "Message deleted";
     if (type === MSG.IMAGE) return text ? `Photo: ${text}` : "Photo";
     if (type === MSG.GIF) return text ? `GIF: ${text}` : "GIF";
     return (String(text || "").replace(/\s+/g, " ").trim() || "Start chatting").slice(0, 70);
+  };
+  const messageKey = (messageOrId, kind = CHAT.DIRECT, groupId = null) => {
+    if (messageOrId && typeof messageOrId === "object") {
+      if (messageOrId.groupId) {
+        return `${CHAT.GROUP}:${messageOrId.groupId}:${messageOrId.id}`;
+      }
+      return `${CHAT.DIRECT}:${messageOrId.id}`;
+    }
+
+    return kind === CHAT.GROUP
+      ? `${CHAT.GROUP}:${groupId}:${messageOrId}`
+      : `${CHAT.DIRECT}:${messageOrId}`;
   };
 
   function paintAvatar(node, username, avatarUrl) {
@@ -288,49 +464,134 @@ document.addEventListener("DOMContentLoaded", () => {
     const callInProgress = Boolean(state.call.callId);
     const canStartCall =
       !callInProgress &&
+      isDirectChatSelected() &&
       Boolean(selected && selected.online && selected.userId !== currentUser.id);
 
     if (els.callToggleBtn) {
       els.callToggleBtn.disabled = !canStartCall;
       els.callToggleBtn.classList.toggle("active", callInProgress);
     }
+
+    if (els.shareScreenBtn) {
+      els.shareScreenBtn.disabled = !callInProgress;
+      els.shareScreenBtn.textContent = state.call.screenSharing ? "Stop Sharing" : "Share Screen";
+    }
   }
 
   function updatePresenceLabel() {
-    const selected = getSelectedConversation();
     if (!els.activeUserPresence) {
       return;
     }
 
-    if (!selected) {
+    if (!hasSelectedChat()) {
       els.activeUserPresence.textContent = "";
       els.activeUserPresence.classList.add("hidden");
       return;
     }
 
     els.activeUserPresence.classList.remove("hidden");
-    els.activeUserPresence.textContent = selected.online ? "Online" : "Offline";
-    els.activeUserPresence.style.color = selected.online ? "#15814a" : "var(--muted)";
+    if (isGroupChatSelected()) {
+      const selectedGroup = getSelectedGroup();
+      if (!selectedGroup) {
+        els.activeUserPresence.textContent = "";
+        els.activeUserPresence.classList.add("hidden");
+        return;
+      }
+
+      const onlineMembers = (selectedGroup.members || []).filter((member) => member.online).length;
+      els.activeUserPresence.textContent = `${selectedGroup.members.length} members • ${onlineMembers} online`;
+      els.activeUserPresence.style.color = "var(--muted)";
+      return;
+    }
+
+    const selected = getSelectedConversation();
+    els.activeUserPresence.textContent = selected && selected.online ? "Online" : "Offline";
+    els.activeUserPresence.style.color = selected && selected.online ? "#15814a" : "var(--muted)";
   }
 
   function renderConversations() {
     const previousScrollTop = els.conversationList.scrollTop;
     const term = els.userSearchInput.value.trim().toLowerCase();
     els.conversationList.innerHTML = "";
-    const list = state.conversations.filter((c) => c.username.toLowerCase().includes(term));
-    if (!list.length) {
+    const directList = state.conversations.filter((c) => c.username.toLowerCase().includes(term));
+    const groupList = state.groups.filter((group) => group.name.toLowerCase().includes(term));
+
+    if (!directList.length && !groupList.length) {
       const p = document.createElement("p");
       p.className = "status";
-      p.textContent = "No matching users.";
+      p.textContent = "No matching chats.";
       els.conversationList.appendChild(p);
       return;
     }
 
-    list.forEach((c) => {
+    const appendSection = (title, items, renderItem) => {
+      if (!items.length) {
+        return;
+      }
+
+      const section = document.createElement("section");
+      section.className = "conversation-section";
+
+      const heading = document.createElement("p");
+      heading.className = "conversation-section-title";
+      heading.textContent = title;
+      section.appendChild(heading);
+
+      items.forEach((item) => section.appendChild(renderItem(item)));
+      els.conversationList.appendChild(section);
+    };
+
+    appendSection("Groups", groupList, (group) => {
       const b = document.createElement("button");
       b.type = "button";
       b.className = "conversation-item";
-      if (c.userId === state.selectedUserId) b.classList.add("active");
+      if (isGroupChatSelected() && group.id === state.selectedGroupId) b.classList.add("active");
+      if (state.unreadGroups.has(group.id)) b.classList.add("unread");
+
+      const av = document.createElement("div");
+      av.className = "avatar";
+      paintAvatar(av, group.name, null);
+
+      const main = document.createElement("div");
+      main.className = "conversation-main";
+
+      const top = document.createElement("div");
+      top.className = "conversation-top";
+
+      const identity = document.createElement("span");
+      identity.className = "conversation-identity";
+
+      const badge = document.createElement("span");
+      badge.className = "conversation-badge";
+      badge.textContent = "Group";
+
+      const name = document.createElement("span");
+      name.className = "conversation-username";
+      name.textContent = group.name;
+
+      identity.append(badge, name);
+
+      const tm = document.createElement("span");
+      tm.className = "conversation-time";
+      tm.textContent = group.lastMessage ? tConv(group.lastMessage.createdAt) : "";
+
+      top.append(identity, tm);
+
+      const pv = document.createElement("div");
+      pv.className = "conversation-preview";
+      pv.textContent = getGroupTypingLabel(group) || (group.lastMessage ? group.lastMessage.preview : "Start the conversation");
+
+      main.append(top, pv);
+      b.append(av, main);
+      b.addEventListener("click", () => selectGroup(group.id));
+      return b;
+    });
+
+    appendSection("Direct Messages", directList, (c) => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "conversation-item";
+      if (isDirectChatSelected() && c.userId === state.selectedUserId) b.classList.add("active");
       if (state.unread.has(c.userId)) b.classList.add("unread");
 
       const av = document.createElement("div");
@@ -368,7 +629,7 @@ document.addEventListener("DOMContentLoaded", () => {
       main.append(top, pv);
       b.append(av, main);
       b.addEventListener("click", () => selectConversation(c.userId));
-      els.conversationList.appendChild(b);
+      return b;
     });
 
     const maxScroll = Math.max(0, els.conversationList.scrollHeight - els.conversationList.clientHeight);
@@ -376,7 +637,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function setHeader() {
-    if (!state.selectedUserId) {
+    if (!hasSelectedChat()) {
       els.activeChatLabel.textContent = "Select a conversation";
       paintAvatar(els.activeUserAvatar, "?", null);
       els.typingIndicator.classList.add("hidden");
@@ -386,10 +647,18 @@ document.addEventListener("DOMContentLoaded", () => {
       renderChatMenu();
       return;
     }
+
     els.activeChatLabel.textContent = state.selectedUsername;
     paintAvatar(els.activeUserAvatar, state.selectedUsername, state.selectedAvatarUrl);
-    if (state.typingUsers.has(state.selectedUserId)) {
-      els.typingIndicator.textContent = `${state.selectedUsername} is typing`;
+
+    const typingText = isGroupChatSelected()
+      ? getGroupTypingLabel(getSelectedGroup())
+      : state.typingUsers.has(state.selectedUserId)
+        ? `${state.selectedUsername} is typing`
+        : "";
+
+    if (typingText) {
+      els.typingIndicator.textContent = typingText;
       els.typingIndicator.classList.remove("hidden");
     } else {
       els.typingIndicator.textContent = "";
@@ -405,6 +674,14 @@ document.addEventListener("DOMContentLoaded", () => {
       const at = a.lastMessage ? new Date(a.lastMessage.createdAt).getTime() : 0;
       const bt = b.lastMessage ? new Date(b.lastMessage.createdAt).getTime() : 0;
       return bt - at || a.username.localeCompare(b.username);
+    });
+  }
+
+  function sortGroups() {
+    state.groups.sort((a, b) => {
+      const at = a.lastMessage ? new Date(a.lastMessage.createdAt).getTime() : 0;
+      const bt = b.lastMessage ? new Date(b.lastMessage.createdAt).getTime() : 0;
+      return bt - at || a.name.localeCompare(b.name);
     });
   }
 
@@ -442,12 +719,20 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function messageNode(m) {
     const self = m.senderId === currentUser.id;
+    const key = messageKey(m);
     const row = document.createElement("article");
     row.className = `message-row ${self ? "self" : "other"}`;
     row.dataset.messageId = String(m.id);
+    row.dataset.messageKey = key;
 
     const bubble = document.createElement("div");
     bubble.className = "message-bubble";
+    if (m.groupId && !self) {
+      const sender = document.createElement("p");
+      sender.className = "message-sender";
+      sender.textContent = m.senderUsername || `User ${m.senderId}`;
+      bubble.appendChild(sender);
+    }
     if ((m.messageType === MSG.IMAGE || m.messageType === MSG.GIF) && m.mediaUrl) {
       const img = document.createElement("img");
       img.className = "message-media";
@@ -475,9 +760,9 @@ document.addEventListener("DOMContentLoaded", () => {
     if (self) {
       const st = document.createElement("span");
       st.dataset.messageStatus = "1";
-      st.textContent = m.messageType === MSG.DELETED ? "" : state.messageStatus.get(m.id) || m.status || "sent";
+      st.textContent = m.messageType === MSG.DELETED ? "" : state.messageStatus.get(key) || m.status || "sent";
       meta.appendChild(st);
-      if (m.messageType !== MSG.DELETED) {
+      if (m.messageType !== MSG.DELETED && !m.groupId) {
         const del = document.createElement("button");
         del.type = "button";
         del.className = "delete-message-btn";
@@ -492,21 +777,23 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function upsertMessage(m, force) {
     if (!m || !m.id) return;
-    if (m.status) state.messageStatus.set(m.id, m.status);
-    if (m.messageType === MSG.DELETED) state.messageStatus.delete(m.id);
+    const key = messageKey(m);
+    if (m.status) state.messageStatus.set(key, m.status);
+    if (m.messageType === MSG.DELETED) state.messageStatus.delete(key);
     const keepBottom = force || nearBottom() || m.senderId === currentUser.id;
-    const old = state.messageNodes.get(m.id);
+    const old = state.messageNodes.get(key);
     const node = messageNode(m);
     if (old) old.replaceWith(node);
     else els.messagesContainer.appendChild(node);
-    state.messageNodes.set(m.id, node);
+    state.messageNodes.set(key, node);
     if (keepBottom) scrollBottom(true);
   }
 
   function updateStatus(id, status) {
     if (!id || !status) return;
-    state.messageStatus.set(id, status);
-    const node = state.messageNodes.get(id);
+    const key = messageKey(id, CHAT.DIRECT);
+    state.messageStatus.set(key, status);
+    const node = state.messageNodes.get(key);
     if (!node) return;
     const st = node.querySelector("[data-message-status]");
     if (st) st.textContent = status;
@@ -532,44 +819,105 @@ document.addEventListener("DOMContentLoaded", () => {
         return x;
       });
       sortConversations();
-      renderConversations();
-
-      if (!state.conversations.length) {
-        state.selectedUserId = null;
-        state.selectedUsername = "";
-        state.selectedAvatarUrl = null;
-        setHeader();
-        state.messageNodes.clear();
-        els.messagesContainer.innerHTML = "";
-        setStatus("No users available yet.", false);
-        return;
-      }
-
-      if (!state.conversations.some((c) => c.userId === state.selectedUserId)) {
-        await selectConversation(state.conversations[0].userId);
-      } else {
-        const c = state.conversations.find((it) => it.userId === state.selectedUserId);
-        state.selectedUsername = c.username;
-        state.selectedAvatarUrl = c.avatarUrl;
-        setHeader();
-        renderConversations();
-      }
     } catch (e) {
       setStatus(e.message, true);
     }
   }
 
-  async function loadMessages() {
-    if (!state.selectedUserId) return;
+  async function loadGroups() {
     try {
-      const { messages = [] } = await window.Api.fetchMessages(state.selectedUserId, currentUser.id);
+      const { groups = [] } = await window.Api.fetchGroups(currentUser.id);
+      state.groups = groups.map((group) => ({
+        id: group.id,
+        name: group.name,
+        createdAt: group.createdAt,
+        members: Array.isArray(group.members)
+          ? group.members.map((member) => {
+              const normalizedMember = {
+                id: Number(member.id),
+                username: member.username || `User ${member.id}`,
+                avatarUrl: norm(member.avatarUrl),
+                online: Boolean(member.online),
+              };
+              state.userMap.set(normalizedMember.id, {
+                username: normalizedMember.username,
+                avatarUrl: normalizedMember.avatarUrl,
+                online: normalizedMember.online,
+              });
+              return normalizedMember;
+            })
+          : [],
+        lastMessage: group.lastMessage || null,
+      }));
+      sortGroups();
+    } catch (e) {
+      setStatus(e.message, true);
+    }
+  }
+
+  async function ensureActiveSelection() {
+    if (isGroupChatSelected() && state.groups.some((group) => group.id === state.selectedGroupId)) {
+      const group = getSelectedGroup();
+      state.selectedUsername = group.name;
+      state.selectedAvatarUrl = null;
+      setHeader();
+      renderConversations();
+      await loadMessages();
+      return;
+    }
+
+    if (isDirectChatSelected() && state.conversations.some((c) => c.userId === state.selectedUserId)) {
+      const conversation = getSelectedConversation();
+      state.selectedUsername = conversation.username;
+      state.selectedAvatarUrl = conversation.avatarUrl;
+      setHeader();
+      renderConversations();
+      await loadMessages();
+      return;
+    }
+
+    if (state.conversations.length) {
+      await selectConversation(state.conversations[0].userId);
+      return;
+    }
+
+    if (state.groups.length) {
+      await selectGroup(state.groups[0].id);
+      return;
+    }
+
+    state.selectedChatKind = null;
+    state.selectedUserId = null;
+    state.selectedGroupId = null;
+    state.selectedUsername = "";
+    state.selectedAvatarUrl = null;
+    state.messageNodes.clear();
+    els.messagesContainer.innerHTML = "";
+    setHeader();
+    renderConversations();
+    setStatus("No chats available yet.", false);
+  }
+
+  async function refreshChatLists() {
+    await Promise.all([loadConversations(), loadGroups()]);
+    renderConversations();
+    await ensureActiveSelection();
+  }
+
+  async function loadMessages() {
+    if (!hasSelectedChat()) return;
+    try {
+      const { messages = [] } = isGroupChatSelected()
+        ? await window.Api.fetchGroupMessages(state.selectedGroupId, currentUser.id)
+        : await window.Api.fetchMessages(state.selectedUserId, currentUser.id);
       state.messageNodes.clear();
       els.messagesContainer.innerHTML = "";
       const f = document.createDocumentFragment();
       messages.forEach((m) => {
-        if (m.status) state.messageStatus.set(m.id, m.status);
+        const key = messageKey(m);
+        if (m.status) state.messageStatus.set(key, m.status);
         const n = messageNode(m);
-        state.messageNodes.set(m.id, n);
+        state.messageNodes.set(key, n);
         f.appendChild(n);
       });
       els.messagesContainer.appendChild(f);
@@ -582,13 +930,33 @@ document.addEventListener("DOMContentLoaded", () => {
   async function selectConversation(userId) {
     const c = state.conversations.find((it) => it.userId === userId);
     if (!c) return;
-    if (state.selectedUserId && state.selectedUserId !== userId) stopTyping();
+    if (!isDirectChatSelected() || state.selectedUserId !== userId) stopTyping();
     toggleChatMenu(false);
+    state.selectedChatKind = CHAT.DIRECT;
     state.selectedUserId = userId;
+    state.selectedGroupId = null;
     state.selectedUsername = c.username;
     state.selectedAvatarUrl = c.avatarUrl;
     state.unread.delete(userId);
     state.typingUsers.delete(userId);
+    setHeader();
+    renderConversations();
+    await loadMessages();
+    els.messageInput.focus();
+  }
+
+  async function selectGroup(groupId) {
+    const group = state.groups.find((item) => item.id === groupId);
+    if (!group) return;
+    if (!isGroupChatSelected() || state.selectedGroupId !== groupId) stopTyping();
+    toggleChatMenu(false);
+    state.selectedChatKind = CHAT.GROUP;
+    state.selectedGroupId = groupId;
+    state.selectedUserId = null;
+    state.selectedUsername = group.name;
+    state.selectedAvatarUrl = null;
+    state.unreadGroups.delete(groupId);
+    clearGroupTyping(groupId);
     setHeader();
     renderConversations();
     await loadMessages();
@@ -614,24 +982,132 @@ document.addEventListener("DOMContentLoaded", () => {
     renderConversations();
   }
 
+  function updateGroupFromMessage(m) {
+    if (!m || !m.groupId) {
+      return;
+    }
+
+    let group = state.groups.find((item) => item.id === m.groupId);
+    if (!group) {
+      group = {
+        id: m.groupId,
+        name: `Group ${m.groupId}`,
+        createdAt: m.createdAt,
+        members: [],
+        lastMessage: null,
+      };
+      state.groups.push(group);
+    }
+
+    const authorLabel = m.senderId === currentUser.id ? "You" : m.senderUsername || `User ${m.senderId}`;
+    group.lastMessage = {
+      id: m.id,
+      groupId: m.groupId,
+      senderId: m.senderId,
+      senderUsername: m.senderUsername || null,
+      messageType: m.messageType,
+      preview: `${authorLabel}: ${preview(m.messageType, m.message)}`,
+      createdAt: m.createdAt,
+    };
+
+    sortGroups();
+    renderConversations();
+  }
+
+  function upsertGroup(groupData) {
+    if (!groupData || !groupData.id) {
+      return;
+    }
+
+    let group = state.groups.find((item) => item.id === groupData.id);
+    if (!group) {
+      group = {
+        id: groupData.id,
+        name: groupData.name || `Group ${groupData.id}`,
+        createdAt: groupData.createdAt || new Date().toISOString(),
+        members: [],
+        lastMessage: null,
+      };
+      state.groups.push(group);
+    }
+
+    if (groupData.name) {
+      group.name = groupData.name;
+    }
+    if (groupData.createdAt) {
+      group.createdAt = groupData.createdAt;
+    }
+    if (Array.isArray(groupData.members)) {
+      group.members = groupData.members.map((member) => {
+        const normalizedMember = {
+          id: Number(member.id),
+          username: member.username || `User ${member.id}`,
+          avatarUrl: norm(member.avatarUrl),
+          online: Boolean(member.online),
+        };
+        state.userMap.set(normalizedMember.id, {
+          username: normalizedMember.username,
+          avatarUrl: normalizedMember.avatarUrl,
+          online: normalizedMember.online,
+        });
+        return normalizedMember;
+      });
+    }
+    if (groupData.lastMessage) {
+      group.lastMessage = groupData.lastMessage;
+    }
+
+    sortGroups();
+
+    if (isGroupChatSelected() && state.selectedGroupId === group.id) {
+      state.selectedUsername = group.name;
+      state.selectedAvatarUrl = null;
+      setHeader();
+    }
+
+    renderConversations();
+  }
+
   async function sendMessage(body) {
-    if (!state.selectedUserId) {
+    if (!hasSelectedChat()) {
       setStatus("Choose a conversation first.", true);
       return null;
     }
-    const payload = {
-      senderId: currentUser.id,
-      receiverId: state.selectedUserId,
-      message: body.message || "",
-      messageType: body.messageType || MSG.TEXT,
-      mediaUrl: body.mediaUrl || null,
-    };
+
     try {
-      const sent = socket.connected
-        ? await emitAck("send_message", payload)
-        : (await window.Api.sendMessage(payload)).data;
+      let sent;
+
+      if (isGroupChatSelected()) {
+        if (!socket.connected) {
+          throw new Error("Realtime connection is required for group messages.");
+        }
+
+        sent = await emitAck("send_group_message", {
+          groupId: state.selectedGroupId,
+          senderId: currentUser.id,
+          message: body.message || "",
+          messageType: body.messageType || MSG.TEXT,
+          mediaUrl: body.mediaUrl || null,
+        });
+
+        updateGroupFromMessage(sent);
+      } else {
+        const payload = {
+          senderId: currentUser.id,
+          receiverId: state.selectedUserId,
+          message: body.message || "",
+          messageType: body.messageType || MSG.TEXT,
+          mediaUrl: body.mediaUrl || null,
+        };
+
+        sent = socket.connected
+          ? await emitAck("send_message", payload)
+          : (await window.Api.sendMessage(payload)).data;
+
+        updateConvFromMessage(sent);
+      }
+
       upsertMessage(sent, true);
-      updateConvFromMessage(sent);
       setStatus("", false);
       return sent;
     } catch (e) {
@@ -662,16 +1138,58 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  function getTypingContext() {
+    if (isDirectChatSelected()) {
+      return {
+        key: `${CHAT.DIRECT}:${state.selectedUserId}`,
+        kind: CHAT.DIRECT,
+        targetId: state.selectedUserId,
+      };
+    }
+
+    if (isGroupChatSelected()) {
+      return {
+        key: `${CHAT.GROUP}:${state.selectedGroupId}`,
+        kind: CHAT.GROUP,
+        targetId: state.selectedGroupId,
+      };
+    }
+
+    return null;
+  }
+
   function emitTyping() {
-    if (!socket.connected || !state.selectedUserId || state.typingSent) return;
-    socket.emit("typing", { senderId: currentUser.id, receiverId: state.selectedUserId });
-    state.typingSent = true;
+    const context = getTypingContext();
+    if (!socket.connected || !context || state.typingSentContext === context.key) return;
+
+    stopTyping();
+
+    if (context.kind === CHAT.GROUP) {
+      socket.emit("group_typing", { senderId: currentUser.id, groupId: context.targetId });
+    } else {
+      socket.emit("typing", { senderId: currentUser.id, receiverId: context.targetId });
+    }
+
+    state.typingSentContext = context.key;
   }
 
   function stopTyping() {
-    if (!socket.connected || !state.selectedUserId || !state.typingSent) return;
-    socket.emit("stop_typing", { senderId: currentUser.id, receiverId: state.selectedUserId });
-    state.typingSent = false;
+    if (!state.typingSentContext) {
+      return;
+    }
+
+    const [kind, targetIdRaw] = state.typingSentContext.split(":");
+    const targetId = Number(targetIdRaw);
+
+    if (socket.connected && targetId) {
+      if (kind === CHAT.GROUP) {
+        socket.emit("group_stop_typing", { senderId: currentUser.id, groupId: targetId });
+      } else {
+        socket.emit("stop_typing", { senderId: currentUser.id, receiverId: targetId });
+      }
+    }
+
+    state.typingSentContext = null;
   }
 
   function resetTypingTimer() {
@@ -777,6 +1295,176 @@ document.addEventListener("DOMContentLoaded", () => {
       setStatus("Username updated.", false);
     } catch (e) {
       setStatus(e.message, true);
+    }
+  }
+
+  function setGroupModalStatus(message, isError) {
+    if (!els.groupModalStatus) {
+      return;
+    }
+
+    els.groupModalStatus.textContent = message || "";
+    els.groupModalStatus.style.color = isError ? "var(--danger)" : "var(--muted)";
+  }
+
+  function getGroupEditorCandidates() {
+    const selectedGroup = state.groups.find((group) => group.id === state.groupEditor.groupId);
+    const existingMemberIds = new Set((selectedGroup && selectedGroup.members || []).map((member) => member.id));
+
+    return state.conversations
+      .filter((conversation) => {
+        if (state.groupEditor.mode !== "add") {
+          return true;
+        }
+        return !existingMemberIds.has(conversation.userId);
+      })
+      .map((conversation) => ({
+        id: conversation.userId,
+        username: conversation.username,
+        avatarUrl: conversation.avatarUrl,
+        online: conversation.online,
+      }));
+  }
+
+  function renderGroupEditorOptions() {
+    els.groupMemberOptions.innerHTML = "";
+    const candidates = getGroupEditorCandidates();
+
+    if (!candidates.length) {
+      const empty = document.createElement("p");
+      empty.className = "status";
+      empty.textContent =
+        state.groupEditor.mode === "add"
+          ? "Everyone is already in this group."
+          : "No users are available yet.";
+      els.groupMemberOptions.appendChild(empty);
+      return;
+    }
+
+    candidates.forEach((candidate) => {
+      const row = document.createElement("label");
+      row.className = "group-member-option";
+
+      const main = document.createElement("div");
+      main.className = "group-member-option-main";
+
+      const avatar = document.createElement("div");
+      avatar.className = "avatar";
+      paintAvatar(avatar, candidate.username, candidate.avatarUrl);
+
+      const meta = document.createElement("div");
+      meta.className = "group-member-option-meta";
+
+      const name = document.createElement("p");
+      name.className = "group-member-option-name";
+      name.textContent = candidate.username;
+
+      const status = document.createElement("p");
+      status.className = "group-member-option-status";
+      status.textContent = candidate.online ? "Online" : "Offline";
+
+      meta.append(name, status);
+      main.append(avatar, meta);
+
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = state.groupEditor.selectedUserIds.has(candidate.id);
+      checkbox.addEventListener("change", () => {
+        if (checkbox.checked) {
+          state.groupEditor.selectedUserIds.add(candidate.id);
+        } else {
+          state.groupEditor.selectedUserIds.delete(candidate.id);
+        }
+      });
+
+      row.append(main, checkbox);
+      els.groupMemberOptions.appendChild(row);
+    });
+  }
+
+  function openGroupEditor(mode, groupId) {
+    state.groupEditor.mode = mode === "add" ? "add" : "create";
+    state.groupEditor.groupId = groupId || null;
+    state.groupEditor.selectedUserIds = new Set();
+
+    const isAddMode = state.groupEditor.mode === "add";
+    els.groupModalTitle.textContent = isAddMode ? "Add Members" : "Create Group";
+    els.groupModalSubtitle.textContent = isAddMode
+      ? "Invite more people to this conversation."
+      : "Choose members for your new conversation.";
+    els.groupModalHint.textContent = isAddMode
+      ? "Select people who are not already in the group."
+      : "Select at least one person to get started.";
+    els.saveGroupBtn.textContent = isAddMode ? "Add Members" : "Create Group";
+    els.groupNameField.classList.toggle("hidden", isAddMode);
+
+    if (!isAddMode) {
+      els.groupNameInput.value = "";
+    }
+
+    setGroupModalStatus("", false);
+    renderGroupEditorOptions();
+    els.groupModal.classList.remove("hidden");
+
+    if (isAddMode) {
+      els.groupMemberOptions.focus();
+    } else {
+      els.groupNameInput.focus();
+    }
+  }
+
+  function closeGroupEditor() {
+    state.groupEditor.mode = "create";
+    state.groupEditor.groupId = null;
+    state.groupEditor.selectedUserIds = new Set();
+    els.groupNameInput.value = "";
+    setGroupModalStatus("", false);
+    els.groupModal.classList.add("hidden");
+  }
+
+  async function saveGroupEditor() {
+    const memberIds = Array.from(state.groupEditor.selectedUserIds);
+    if (!memberIds.length) {
+      setGroupModalStatus("Choose at least one member.", true);
+      return;
+    }
+
+    try {
+      if (state.groupEditor.mode === "add") {
+        let latestResponse = null;
+        for (const memberId of memberIds) {
+          latestResponse = await window.Api.addUserToGroup(
+            state.groupEditor.groupId,
+            currentUser.id,
+            memberId
+          );
+        }
+        if (latestResponse && latestResponse.group) {
+          upsertGroup(latestResponse.group);
+        }
+        closeGroupEditor();
+        setStatus(memberIds.length > 1 ? "Members added to group." : "Member added to group.", false);
+        return;
+      }
+
+      const groupName = String(els.groupNameInput.value || "").trim();
+      if (!groupName) {
+        setGroupModalStatus("Group name is required.", true);
+        return;
+      }
+
+      const response = await window.Api.createGroup(currentUser.id, groupName, memberIds);
+      if (response.group) {
+        upsertGroup(response.group);
+        closeGroupEditor();
+        await selectGroup(response.group.id);
+      } else {
+        closeGroupEditor();
+        await refreshChatLists();
+      }
+      setStatus("Group created.", false);
+    } catch (e) {
+      setGroupModalStatus(e.message, true);
     }
   }
 
@@ -902,14 +1590,56 @@ document.addEventListener("DOMContentLoaded", () => {
     if (open) els.gifPicker.classList.add("hidden");
   }
 
+  function updateVideoElement(videoEl, fallbackEl, stream, requiresVideo) {
+    if (!videoEl || !fallbackEl) {
+      return;
+    }
+
+    const hasMedia = stream && (!requiresVideo || stream.getVideoTracks().length > 0);
+    if (!hasMedia) {
+      videoEl.srcObject = null;
+      videoEl.classList.add("hidden");
+      fallbackEl.classList.remove("hidden");
+      return;
+    }
+
+    videoEl.srcObject = stream;
+    videoEl.classList.remove("hidden");
+    fallbackEl.classList.add("hidden");
+    const playPromise = typeof videoEl.play === "function" ? videoEl.play() : null;
+    if (playPromise && typeof playPromise.catch === "function") {
+      playPromise.catch(() => {});
+    }
+  }
+
+  function syncLocalVideoPreview() {
+    const previewStream = state.call.screenSharing ? state.call.screenStream : state.call.localStream;
+    els.localVideoLabel.textContent = state.call.screenSharing ? "You • Sharing screen" : "You";
+    els.localVideoFallback.textContent = state.call.screenSharing
+      ? "Screen preview"
+      : "Camera preview";
+    updateVideoElement(els.localVideo, els.localVideoFallback, previewStream, true);
+  }
+
+  function syncRemoteMediaPreview() {
+    updateVideoElement(els.remoteVideo, els.remoteVideoFallback, state.call.remoteStream, true);
+    if (els.remoteAudio) {
+      els.remoteAudio.srcObject = state.call.remoteStream || null;
+    }
+  }
+
   function resetCallUi() {
     els.callDock.classList.add("hidden");
-    els.callLabel.textContent = "Voice call";
+    els.callLabel.textContent = "Call";
     els.callSubLabel.textContent = "";
     els.muteCallBtn.textContent = "Mute";
     els.muteCallBtn.disabled = true;
+    els.shareScreenBtn.textContent = "Share Screen";
+    els.shareScreenBtn.disabled = true;
     els.endCallBtn.disabled = true;
     els.incomingCallModal.classList.add("hidden");
+    syncLocalVideoPreview();
+    syncRemoteMediaPreview();
     updateCallButtonState();
   }
 
@@ -925,7 +1655,10 @@ document.addEventListener("DOMContentLoaded", () => {
     els.muteCallBtn.textContent = "Mute";
     els.callDock.classList.remove("hidden");
     els.muteCallBtn.disabled = !isActive;
+    els.shareScreenBtn.disabled = !state.call.callId;
     els.endCallBtn.disabled = false;
+    syncLocalVideoPreview();
+    syncRemoteMediaPreview();
     updateCallButtonState();
   }
 
@@ -936,6 +1669,9 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     if (status === CALL.ACTIVE) {
       els.muteCallBtn.disabled = false;
+    }
+    if (state.call.callId) {
+      els.shareScreenBtn.disabled = false;
     }
   }
 
@@ -954,17 +1690,47 @@ document.addEventListener("DOMContentLoaded", () => {
       state.call.localStream.getTracks().forEach((track) => track.stop());
       state.call.localStream = null;
     }
+    if (state.call.screenStream) {
+      state.call.screenStream.getTracks().forEach((track) => {
+        track.onended = null;
+        track.stop();
+      });
+      state.call.screenStream = null;
+    }
+    state.call.screenSharing = false;
+    state.call.videoSender = null;
+    state.call.remoteStream = null;
     if (els.remoteAudio) {
       els.remoteAudio.srcObject = null;
     }
+    if (els.remoteVideo) {
+      els.remoteVideo.srcObject = null;
+    }
+    if (els.localVideo) {
+      els.localVideo.srcObject = null;
+    }
+    syncLocalVideoPreview();
+    syncRemoteMediaPreview();
   }
 
-  async function ensureLocalAudioStream() {
+  async function ensureLocalMediaStream() {
     if (state.call.localStream) {
       return state.call.localStream;
     }
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: true,
+      video: {
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+      },
+    });
+
+    stream.getAudioTracks().forEach((track) => {
+      track.enabled = !state.call.muted;
+    });
     state.call.localStream = stream;
+    syncLocalVideoPreview();
     return stream;
   }
 
@@ -978,10 +1744,16 @@ document.addEventListener("DOMContentLoaded", () => {
     pc.ontrack = (event) => {
       console.log("RECEIVED TRACK");
 
-      const remoteAudio = document.getElementById("remoteAudio");
-      if (remoteAudio && event.streams && event.streams[0]) {
-        remoteAudio.srcObject = event.streams[0];
+      if (event.streams && event.streams[0]) {
+        state.call.remoteStream = event.streams[0];
+      } else {
+        if (!state.call.remoteStream) {
+          state.call.remoteStream = new MediaStream();
+        }
+        state.call.remoteStream.addTrack(event.track);
       }
+
+      syncRemoteMediaPreview();
     };
 
     pc.onicecandidate = (event) => {
@@ -1070,12 +1842,86 @@ document.addEventListener("DOMContentLoaded", () => {
     return pc;
   }
 
-  async function attachLocalAudioTracks(pc) {
-    const stream = await ensureLocalAudioStream();
+  async function attachLocalMediaTracks(pc) {
+    const stream = await ensureLocalMediaStream();
     stream.getAudioTracks().forEach((track) => {
       track.enabled = !state.call.muted;
       pc.addTrack(track, stream);
     });
+    const [videoTrack] = stream.getVideoTracks();
+    if (videoTrack) {
+      state.call.videoSender = pc.addTrack(videoTrack, stream);
+    }
+    syncLocalVideoPreview();
+  }
+
+  async function revertToCameraTrack() {
+    const stream = await ensureLocalMediaStream();
+    const [cameraTrack] = stream.getVideoTracks();
+
+    if (!cameraTrack || !state.call.videoSender) {
+      throw new Error("Camera video track is unavailable.");
+    }
+
+    await state.call.videoSender.replaceTrack(cameraTrack);
+
+    if (state.call.screenStream) {
+      state.call.screenStream.getTracks().forEach((track) => {
+        track.onended = null;
+        track.stop();
+      });
+      state.call.screenStream = null;
+    }
+
+    state.call.screenSharing = false;
+    syncLocalVideoPreview();
+    updateCallButtonState();
+  }
+
+  async function toggleScreenShare() {
+    if (!state.call.callId || !state.call.videoSender) {
+      setStatus("Call video is not ready yet.", true);
+      return;
+    }
+
+    try {
+      if (state.call.screenSharing) {
+        await revertToCameraTrack();
+        setStatus("Returned to camera.", false);
+        return;
+      }
+
+      const displayStream = await navigator.mediaDevices.getDisplayMedia({
+        video: true,
+        audio: false,
+      });
+      const [screenTrack] = displayStream.getVideoTracks();
+
+      if (!screenTrack) {
+        throw new Error("No screen track is available.");
+      }
+
+      screenTrack.onended = () => {
+        if (state.call.screenSharing) {
+          revertToCameraTrack().catch((error) => {
+            setStatus(error.message || "Returned to camera.", false);
+          });
+        }
+      };
+
+      state.call.screenStream = displayStream;
+      state.call.screenSharing = true;
+      await state.call.videoSender.replaceTrack(screenTrack);
+      syncLocalVideoPreview();
+      updateCallButtonState();
+      setStatus("Screen sharing started.", false);
+    } catch (error) {
+      if (error && error.name === "NotAllowedError") {
+        setStatus("Screen sharing was cancelled.", true);
+        return;
+      }
+      setStatus((error && error.message) || "Unable to share your screen.", true);
+    }
   }
 
   function resetRemoteIceState(clearQueue) {
@@ -1149,13 +1995,14 @@ document.addEventListener("DOMContentLoaded", () => {
       state.call.callId = callId;
       state.call.peerUserId = selected.userId;
       state.call.muted = false;
+      state.call.screenSharing = false;
       state.call.hasRelayCandidate = false;
       resetRemoteIceState(true);
 
       setCallUi(selected.userId, `Calling ${selected.username}`, "Ringing...", false);
 
       const pc = await createPeerConnection(selected.userId, callId);
-      await attachLocalAudioTracks(pc);
+      await attachLocalMediaTracks(pc);
 
       const offer = await pc.createOffer();
       console.log("OFFER CREATED");
@@ -1190,18 +2037,19 @@ document.addEventListener("DOMContentLoaded", () => {
       state.call.callId = pending.callId;
       state.call.peerUserId = pending.fromUserId;
       state.call.muted = false;
+      state.call.screenSharing = false;
       state.call.hasRelayCandidate = false;
       resetRemoteIceState(false);
 
       setCallUi(
         pending.fromUserId,
-        `Voice call with ${profile.username || `User ${pending.fromUserId}`}`,
+        `Call with ${profile.username || `User ${pending.fromUserId}`}`,
         "Connecting...",
         false
       );
 
       const pc = await createPeerConnection(pending.fromUserId, pending.callId);
-      await attachLocalAudioTracks(pc);
+      await attachLocalMediaTracks(pc);
       await pc.setRemoteDescription(new RTCSessionDescription(pending.offer));
       await flushQueuedRemoteCandidates();
 
@@ -1248,6 +2096,7 @@ document.addEventListener("DOMContentLoaded", () => {
     state.call.callId = null;
     state.call.peerUserId = null;
     state.call.muted = false;
+    state.call.screenSharing = false;
     state.call.hasRelayCandidate = false;
     state.call.pendingIncoming = null;
     resetRemoteIceState(true);
@@ -1402,11 +2251,31 @@ document.addEventListener("DOMContentLoaded", () => {
       if (Object.prototype.hasOwnProperty.call(data, "online")) c.online = Boolean(data.online);
     }
 
+    state.groups.forEach((group) => {
+      const member = (group.members || []).find((item) => item.id === uid);
+      if (!member) {
+        return;
+      }
+
+      if (data.username) member.username = data.username;
+      if (Object.prototype.hasOwnProperty.call(data, "avatarUrl")) {
+        member.avatarUrl = norm(data.avatarUrl);
+      }
+      if (Object.prototype.hasOwnProperty.call(data, "online")) {
+        member.online = Boolean(data.online);
+      }
+    });
+
     if (state.selectedUserId === uid) {
       if (data.username) state.selectedUsername = data.username;
       if (Object.prototype.hasOwnProperty.call(data, "avatarUrl")) {
         state.selectedAvatarUrl = norm(data.avatarUrl);
       }
+      setHeader();
+      return;
+    }
+
+    if (isGroupChatSelected()) {
       setHeader();
     }
   }
@@ -1416,9 +2285,14 @@ document.addEventListener("DOMContentLoaded", () => {
       socket.emit("register", { userId: currentUser.id });
     });
     socket.on("disconnect", () => {
+      state.typingSentContext = null;
+      state.typingUsers.clear();
+      state.typingGroups.clear();
       if (state.call.callId) {
         finishCall(false, "Connection lost. Call ended.");
       }
+      setHeader();
+      renderConversations();
     });
     socket.on("receive_message", (m) => {
       if (!m || !m.id) return;
@@ -1431,6 +2305,18 @@ document.addEventListener("DOMContentLoaded", () => {
         }
       } else if (m.senderId !== currentUser.id) {
         state.unread.add(m.senderId);
+        renderConversations();
+      }
+    });
+    socket.on("receive_group_message", (m) => {
+      if (!m || !m.id) return;
+      updateGroupFromMessage(m);
+      if (isOpenGroupMessage(m)) {
+        upsertMessage(m, false);
+        clearGroupTyping(m.groupId, m.senderId);
+        setHeader();
+      } else if (m.senderId !== currentUser.id) {
+        state.unreadGroups.add(m.groupId);
         renderConversations();
       }
     });
@@ -1449,10 +2335,26 @@ document.addEventListener("DOMContentLoaded", () => {
       setHeader();
       renderConversations();
     });
+    socket.on("group_typing", (p) => {
+      const sid = Number(p && p.senderId);
+      const groupId = Number(p && p.groupId);
+      if (!sid || !groupId || sid === currentUser.id) return;
+      getGroupTypingSet(groupId).add(sid);
+      setHeader();
+      renderConversations();
+    });
     socket.on("stop_typing", (p) => {
       const sid = Number(p && p.senderId);
       if (!sid) return;
       state.typingUsers.delete(sid);
+      setHeader();
+      renderConversations();
+    });
+    socket.on("group_stop_typing", (p) => {
+      const sid = Number(p && p.senderId);
+      const groupId = Number(p && p.groupId);
+      if (!groupId) return;
+      clearGroupTyping(groupId, sid || null);
       setHeader();
       renderConversations();
     });
@@ -1484,6 +2386,16 @@ document.addEventListener("DOMContentLoaded", () => {
       syncUserProfile(uid, { username, avatarUrl: av });
       renderConversations();
     });
+    socket.on("group_updated", (group) => {
+      upsertGroup(group);
+      if (!group || !group.id) {
+        return;
+      }
+
+      if (isGroupChatSelected() && state.selectedGroupId === group.id) {
+        setHeader();
+      }
+    });
 
     socket.on("incoming-call", handleIncomingCall);
     socket.on("call-answered", handleCallAnswer);
@@ -1511,7 +2423,8 @@ document.addEventListener("DOMContentLoaded", () => {
       localStorage.setItem(THEME_KEY, next);
       applyTheme(next);
     });
-    els.refreshUsersBtn.addEventListener("click", () => loadConversations());
+    els.refreshUsersBtn.addEventListener("click", () => refreshChatLists());
+    els.newGroupBtn.addEventListener("click", () => openGroupEditor("create"));
     els.navLogoutBtn.addEventListener("click", () => {
       stopTyping();
       if (state.call.callId) {
@@ -1536,7 +2449,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     els.messageInput.addEventListener("input", () => {
       resizeInput();
-      if (!state.selectedUserId) return;
+      if (!hasSelectedChat()) return;
       if (!els.messageInput.value.trim()) {
         stopTyping();
         return;
@@ -1578,11 +2491,31 @@ document.addEventListener("DOMContentLoaded", () => {
     els.rejectCallBtn.addEventListener("click", () => {
       rejectIncomingCall();
     });
+    els.shareScreenBtn.addEventListener("click", async () => {
+      await toggleScreenShare();
+    });
     els.muteCallBtn.addEventListener("click", () => {
       toggleMuteCall();
     });
     els.endCallBtn.addEventListener("click", () => {
       finishCall(true, "Call ended.");
+    });
+
+    els.closeGroupModalBtn.addEventListener("click", closeGroupEditor);
+    els.cancelGroupBtn.addEventListener("click", closeGroupEditor);
+    els.saveGroupBtn.addEventListener("click", async () => {
+      await saveGroupEditor();
+    });
+    els.groupNameInput.addEventListener("keydown", async (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        await saveGroupEditor();
+      }
+    });
+    els.groupModal.addEventListener("click", (e) => {
+      if (e.target === els.groupModal) {
+        closeGroupEditor();
+      }
     });
 
     els.chatMenuBtn.addEventListener("click", (e) => {
@@ -1607,6 +2540,7 @@ document.addEventListener("DOMContentLoaded", () => {
         toggleGif(false);
         toggleChatMenu(false);
         els.emojiPanel.classList.add("hidden");
+        closeGroupEditor();
         if (state.call.pendingIncoming) {
           rejectIncomingCall();
         }
@@ -1628,14 +2562,14 @@ document.addEventListener("DOMContentLoaded", () => {
     buildEmojiPanel();
     setHeader();
     showAnnouncement(
-      "Announcement from Leo: Screen sharing, group chat, and invites are coming by the end of April 27, 2026."
+      "Screen sharing and group chat are live. Use New Group to start a room or Share Screen during a call."
     );
     resetCallUi();
     toggleChatMenu(false);
     await loadWebRtcConfig();
     bindSocket();
     bindUi();
-    await loadConversations();
+    await refreshChatLists();
   }
 
   init();

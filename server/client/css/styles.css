@@ -312,10 +312,22 @@ label {
   letter-spacing: -0.02em;
 }
 
+.conversation-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .conversation-pane-head p {
   margin: 2px 0 0;
   color: var(--muted);
   font-size: 0.82rem;
+}
+
+.header-action-btn {
+  flex-shrink: 0;
+  padding-inline: 14px;
 }
 
 .search-wrap {
@@ -342,6 +354,20 @@ label {
   flex-direction: column;
   gap: 6px;
   padding-right: 4px;
+}
+
+.conversation-section {
+  display: grid;
+  gap: 6px;
+}
+
+.conversation-section-title {
+  margin: 10px 4px 2px;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .conversation-item {
@@ -440,6 +466,22 @@ label {
   align-items: center;
   gap: 6px;
   min-width: 0;
+}
+
+.conversation-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 0.68rem;
+  font-weight: 800;
+  color: var(--primary-strong);
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+}
+
+.conversation-item.active .conversation-badge {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.18);
 }
 
 .conversation-presence-dot {
@@ -602,6 +644,50 @@ label {
   color: var(--muted);
 }
 
+.chat-menu-extra {
+  margin-top: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.chat-menu-heading {
+  margin: 0;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.chat-menu-members {
+  display: grid;
+  gap: 8px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.chat-menu-member {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-menu-member-meta {
+  min-width: 0;
+}
+
+.chat-menu-member-name {
+  margin: 0;
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.chat-menu-member-status {
+  margin: 2px 0 0;
+  font-size: 0.76rem;
+  color: var(--muted);
+}
+
 .call-btn[disabled] {
   opacity: 0.45;
   cursor: not-allowed;
@@ -650,6 +736,8 @@ label {
   background: var(--bubble-other);
   padding: 10px 12px;
   box-shadow: var(--shadow-sm);
+  display: grid;
+  gap: 6px;
 }
 
 .message-row.self .message-bubble {
@@ -666,6 +754,13 @@ label {
 .message-text a {
   font-weight: 700;
   text-decoration: underline;
+}
+
+.message-sender {
+  margin: 0;
+  font-size: 0.76rem;
+  font-weight: 800;
+  color: var(--primary-strong);
 }
 
 .message-media {
@@ -780,10 +875,70 @@ label {
   border-top: 1px solid var(--border);
   background: color-mix(in srgb, var(--surface) 90%, transparent);
   padding: 10px 12px;
+  display: grid;
+  gap: 12px;
+}
+
+.call-dock-media {
+  display: grid;
+  grid-template-columns: minmax(0, 1.75fr) minmax(180px, 0.9fr);
+  gap: 10px;
+}
+
+.call-video-panel {
+  position: relative;
+  min-height: 170px;
+  border-radius: 18px;
+  overflow: hidden;
+  background: linear-gradient(145deg, #0f1726, #1b2741);
+  border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+}
+
+.call-video-panel video {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  background: #0d1524;
+}
+
+.call-video-panel video.hidden + .call-video-fallback,
+.call-video-panel video:not(.hidden) + .call-video-fallback {
+  position: absolute;
+  inset: 0;
+}
+
+.call-video-fallback {
+  display: grid;
+  place-items: center;
+  padding: 14px;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 0.85rem;
+  background:
+    radial-gradient(circle at top, rgba(132, 167, 255, 0.35), transparent 44%),
+    linear-gradient(145deg, #142033, #0d1524);
+}
+
+.call-video-label {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: rgba(7, 15, 28, 0.62);
+  color: #fff;
+  font-size: 0.76rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+
+.call-dock-meta {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 12px;
+  flex-wrap: wrap;
 }
 
 .call-dock-main {
@@ -808,6 +963,7 @@ label {
 .call-dock-actions {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .emoji-panel {
@@ -1005,6 +1161,80 @@ label {
   gap: 8px;
 }
 
+.group-modal-card {
+  width: min(520px, 100%);
+}
+
+.group-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.group-name-field {
+  margin-top: 12px;
+}
+
+.group-member-picker {
+  margin-top: 12px;
+  display: grid;
+  gap: 10px;
+}
+
+.group-picker-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.group-member-options {
+  max-height: 280px;
+  overflow-y: auto;
+  display: grid;
+  gap: 8px;
+}
+
+.group-member-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface-muted) 82%, transparent);
+}
+
+.group-member-option-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.group-member-option-meta {
+  min-width: 0;
+}
+
+.group-member-option-name {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.group-member-option-status {
+  margin: 2px 0 0;
+  font-size: 0.76rem;
+  color: var(--muted);
+}
+
+.group-member-option input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--primary);
+}
+
 @media (max-width: 1100px) {
   .messenger-shell {
     grid-template-columns: 66px 300px 1fr;
@@ -1077,6 +1307,14 @@ label {
   .call-dock {
     flex-wrap: wrap;
   }
+
+  .call-dock-media {
+    grid-template-columns: 1fr;
+  }
+
+  .local-panel {
+    min-height: 140px;
+  }
 }
 
 @media (max-width: 540px) {
@@ -1096,5 +1334,19 @@ label {
 
   .send-btn {
     min-width: 0;
+  }
+
+  .conversation-title-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .header-action-btn {
+    width: 100%;
+  }
+
+  .call-dock-meta {
+    flex-direction: column;
+    align-items: stretch;
   }
 }

@@ -1,126 +1,154 @@
 # CryptoChat
 
-Secure full-stack chat app with:
+Full-stack encrypted chat app with:
 
 - Node.js + Express backend
-- MariaDB database via `mysql2`
-- Socket.io real-time messaging
-- SHA-256 + salt password hashing
+- MySQL/MariaDB via `mysql2`
+- Socket.io realtime messaging
 - AES-256-CBC encrypted messages
-- Frontend built with HTML/CSS/JavaScript
+- 1-to-1 WebRTC calls with screen sharing
+- Direct messages, group chats, images, GIFs, typing indicators, and profile settings
 
-## Project Structure
+## Project Layout
 
-```
+```text
 CryptoChat/
+├─ src/
+│  ├─ cryptoUtils.js
+│  ├─ db.js
+│  └─ server.js
 ├─ server/
-│  ├─ src/
-│  │  ├─ cryptoUtils.js
-│  │  ├─ db.js
-│  │  └─ server.js
-│  ├─ sql/
-│  │  └─ schema.sql
-│  ├─ .env.example
-│  └─ package.json
-└─ client/
-   ├─ css/
-   │  └─ styles.css
-   ├─ js/
-   │  ├─ api.js
-   │  ├─ auth.js
-   │  ├─ chat.js
-   │  ├─ config.js
-   │  ├─ login.js
-   │  └─ signup.js
-   ├─ chat.html
-   ├─ index.html
-   ├─ login.html
-   └─ signup.html
+│  └─ client/
+│     ├─ css/
+│     ├─ js/
+│     └─ *.html
+├─ sql/
+│  └─ schema.sql
+├─ package.json
+└─ README.md
 ```
 
-## Database Tables
+## New Features
 
-`users` table:
+### Screen Sharing
 
-- `id` (INT, PK, auto increment)
-- `username` (VARCHAR, unique)
-- `password_hash` (VARCHAR)
-- `salt` (VARCHAR)
-- `created_at` (timestamp)
+- Calls now start with camera + microphone
+- Screen sharing uses `navigator.mediaDevices.getDisplayMedia()`
+- The existing `RTCPeerConnection` is reused
+- Video switching uses `RTCRtpSender.replaceTrack()`
+- When the shared screen ends, the app automatically switches back to the camera
 
-`messages` table:
+### Group Chat
 
-- `id` (INT, PK, auto increment)
-- `sender_id` (INT)
-- `receiver_id` (INT)
-- `message_encrypted` (TEXT)
-- `iv` (VARCHAR)
-- `created_at` (timestamp)
+- Create groups from the sidebar
+- Add members from the group chat menu
+- Group messages use the same AES helpers already used for direct chat
+- Realtime group rooms are handled with Socket.io room names like `group_<id>`
 
-Tables are auto-created on server startup. SQL is also provided at `server/sql/schema.sql`.
+## Database Schema
+
+The app auto-creates missing tables on startup.
+
+Existing tables:
+
+- `users`
+- `messages`
+
+New tables:
+
+- `groups`
+- `group_members`
+- `group_messages`
+
+If you want to inspect or apply the schema manually, use [sql/schema.sql](/c:/Users/Click/Desktop/CryptoChat/sql/schema.sql).
+
+## API Endpoints
+
+Auth/profile:
+
+- `POST /signup`
+- `POST /login`
+- `POST /profile/avatar`
+- `POST /profile/username`
+
+Direct chat:
+
+- `GET /conversations?userId=<id>`
+- `GET /messages/:userId?currentUserId=<id>`
+- `POST /send-message`
+- `POST /delete-message`
+
+Groups:
+
+- `POST /groups`
+- `GET /groups?userId=<id>`
+- `POST /groups/:id/add-user`
+- `GET /groups/:id/messages?userId=<id>`
+
+Utility:
+
+- `GET /users?exclude=<id>`
+- `GET /webrtc-config`
+- `GET /gifs/search?q=<term>`
+- `GET /health`
 
 ## Environment Variables
 
-Copy `server/.env.example` to `server/.env` and update values:
+Create a `.env` file in the project root or provide environment variables another way.
+
+Required:
 
 ```bash
-SERVER_PORT=3000
+AES_KEY_HEX=your_64_hex_character_key
+```
+
+Common local development values:
+
+```bash
+PORT=3000
 CLIENT_ORIGIN=*
 DB_HOST=localhost
 DB_PORT=3306
 DB_USER=root
 DB_PASSWORD=your_db_password
 DB_NAME=cryptochat
-AES_KEY_HEX=your_64_hex_chars_key
 ```
 
-`AES_KEY_HEX` must be exactly 64 hex characters (32 bytes) for AES-256-CBC.
-Set `CLIENT_ORIGIN` to a specific frontend URL in production (for local development `*` is simplest).
+Optional WebRTC/TURN values:
 
-## Run Instructions
+```bash
+STUN_URLS=stun:stun.l.google.com:19302
+TURN_URLS=turn:your-turn-host:3478,turns:your-turn-host:5349
+TURN_USERNAME=your_turn_username
+TURN_PASSWORD=your_turn_password
+ICE_TRANSPORT_POLICY=all
+```
+
+## Run
 
 1. Install dependencies:
 
 ```bash
-cd server
 npm install
 ```
 
-2. Configure environment:
+2. Set your database credentials and `AES_KEY_HEX`.
 
-```bash
-copy .env.example .env
-```
-
-3. Start the server:
+3. Start the app:
 
 ```bash
 npm start
 ```
 
-4. Open in browser:
+4. Open:
 
-```
+```text
 http://localhost:3000
 ```
 
-This serves the frontend and backend from the same Express server.
-
-## REST API Endpoints
-
-- `POST /signup`
-- `POST /login`
-- `POST /send-message`
-- `GET /messages/:userId?currentUserId=<loggedInUserId>`
-
-Extra helper endpoint used by UI:
-
-- `GET /users?exclude=<currentUserId>`
-
 ## Notes
 
-- Passwords are hashed with SHA-256 + random salt (as required).
-- Messages are encrypted with AES-256-CBC before DB storage.
-- Every message gets a unique IV.
-- Decryption is done when messages are fetched for chat display.
-- Socket.io is used for instant real-time delivery.
+- The server bootstraps the database and creates any missing tables.
+- Group messages are stored encrypted in `group_messages`.
+- Direct chat deletion still works as before.
+- Screen sharing requires browser permission for camera, microphone, and display capture.

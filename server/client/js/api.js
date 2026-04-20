@@ -46,9 +46,29 @@
       const query = toQuery({ userId, search });
       return request(`/conversations?${query}`);
     },
+    fetchGroups(userId) {
+      const query = toQuery({ userId });
+      return request(`/groups?${query}`);
+    },
+    createGroup(userId, name, memberIds) {
+      return request("/groups", {
+        method: "POST",
+        body: { userId, name, memberIds },
+      });
+    },
+    addUserToGroup(groupId, requesterId, newUserId) {
+      return request(`/groups/${groupId}/add-user`, {
+        method: "POST",
+        body: { requesterId, newUserId },
+      });
+    },
     fetchMessages(otherUserId, currentUserId) {
       const query = toQuery({ currentUserId });
       return request(`/messages/${otherUserId}?${query}`);
+    },
+    fetchGroupMessages(groupId, userId) {
+      const query = toQuery({ userId });
+      return request(`/groups/${groupId}/messages?${query}`);
     },
     sendMessage(payload) {
       return request("/send-message", {
