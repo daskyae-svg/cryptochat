@@ -571,7 +571,7 @@ async function findGroupById(groupId) {
   const db = getDb();
   const [rows] = await db.execute(
     `
-    SELECT id, name, created_at
+    SELECT id, name, avatar_url, created_at
     FROM \`groups\`
     WHERE id = ?
     LIMIT 1
@@ -685,6 +685,7 @@ async function getGroupsForUser(userId, specificGroupId = null) {
     SELECT
       g.id AS group_id,
       g.name,
+      g.avatar_url,
       g.created_at AS group_created_at,
       gm_latest.id AS message_id,
       gm_latest.group_id,
@@ -766,6 +767,7 @@ async function getGroupsForUser(userId, specificGroupId = null) {
     return {
       id: row.group_id,
       name: row.name,
+      avatarUrl: row.avatar_url || null,
       createdAt: toIsoString(row.group_created_at),
       members: membersByGroupId.get(row.group_id) || [],
       lastMessage: mappedMessage
@@ -952,6 +954,7 @@ async function buildGroupRealtimePayload(groupId) {
   return {
     id: group.id,
     name: group.name,
+    avatarUrl: group.avatar_url || null,
     createdAt: toIsoString(group.created_at),
     members: await getGroupMembers(groupId),
   };
@@ -1435,6 +1438,55 @@ app.get("/groups", async (req, res) => {
   } catch (error) {
     console.error("[groups:list] failed:", error);
     return res.status(500).json({ error: "Failed to load groups." });
+  }
+});
+
+app.post("/groups/:id/avatar", async (req, res) => {
+  try {
+    const groupId = toPositiveInt(req.params.id);
+    const requesterId = toPositiveInt(req.body.requesterId);
+    let avatarUrl =
+      req.body.avatarUrl === undefined || req.body.avatarUrl === null
+        ? null
+        : String(req.body.avatarUrl).trim();
+
+    if (!groupId || !requesterId) {
+      return res.status(400).json({ error: "Valid group id and requesterId are required." });
+    }
+
+    await ensureGroupMembership(groupId, requesterId);
+
+    if (avatarUrl === "") {
+      avatarUrl = null;
+    }
+
+    if (avatarUrl && avatarUrl.length > MAX_MEDIA_URL_LENGTH) {
+      return res.status(400).json({ error: "Group image is too large." });
+    }
+
+    const db = getDb();
+    await db.execute(
+      `
+      UPDATE \`groups\`
+      SET avatar_url = ?
+      WHERE id = ?
+      `,
+      [avatarUrl, groupId]
+    );
+
+    await emitGroupUpdate(groupId);
+    const group = await getGroupSummary(groupId, requesterId);
+
+    return res.json({
+      message: "Group photo updated.",
+      group,
+    });
+  } catch (error) {
+    const status = error.status || 500;
+    if (status >= 500) {
+      console.error("[groups:avatar] failed:", error);
+    }
+    return res.status(status).json({ error: error.message || "Failed to update group photo." });
   }
 });
 

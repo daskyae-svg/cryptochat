@@ -47,6 +47,7 @@ document.addEventListener("DOMContentLoaded", () => {
     emojiToggleBtn: $("emojiToggleBtn"),
     imageUploadBtn: $("imageUploadBtn"),
     imageInput: $("imageInput"),
+    groupAvatarInput: $("groupAvatarInput"),
     gifToggleBtn: $("gifToggleBtn"),
     gifPicker: $("gifPicker"),
     closeGifBtn: $("closeGifBtn"),
@@ -69,15 +70,20 @@ document.addEventListener("DOMContentLoaded", () => {
     profileAvatarInput: $("profileAvatarInput"),
     callToggleBtn: $("callToggleBtn"),
     callDock: $("callDock"),
+    callDockMedia: $("callDockMedia"),
     callAvatar: $("callAvatar"),
     callLabel: $("callLabel"),
     callSubLabel: $("callSubLabel"),
+    toggleCallViewBtn: $("toggleCallViewBtn"),
+    fullscreenCallBtn: $("fullscreenCallBtn"),
     shareScreenBtn: $("shareScreenBtn"),
     muteCallBtn: $("muteCallBtn"),
     endCallBtn: $("endCallBtn"),
+    remoteVideoPanel: $("remoteVideoPanel"),
     localVideo: $("localVideo"),
     localVideoFallback: $("localVideoFallback"),
     localVideoLabel: $("localVideoLabel"),
+    localVideoPanel: $("localVideoPanel"),
     remoteVideo: $("remoteVideo"),
     remoteVideoFallback: $("remoteVideoFallback"),
     incomingCallModal: $("incomingCallModal"),
@@ -95,6 +101,12 @@ document.addEventListener("DOMContentLoaded", () => {
     saveGroupBtn: $("saveGroupBtn"),
     cancelGroupBtn: $("cancelGroupBtn"),
     closeGroupModalBtn: $("closeGroupModalBtn"),
+    groupCallModal: $("groupCallModal"),
+    groupCallSubtitle: $("groupCallSubtitle"),
+    groupCallMemberOptions: $("groupCallMemberOptions"),
+    groupCallStatus: $("groupCallStatus"),
+    closeGroupCallModalBtn: $("closeGroupCallModalBtn"),
+    cancelGroupCallBtn: $("cancelGroupCallBtn"),
     remoteAudio: $("remoteAudio"),
   };
 
@@ -132,6 +144,7 @@ document.addEventListener("DOMContentLoaded", () => {
       videoSender: null,
       muted: false,
       screenSharing: false,
+      mediaCollapsed: false,
       hasRelayCandidate: false,
       pendingIncoming: null,
       pendingRemoteCandidates: [],
@@ -263,6 +276,50 @@ document.addEventListener("DOMContentLoaded", () => {
     return isGroupChatSelected() ? getSelectedGroup() : getSelectedConversation();
   }
 
+  function getUserProfile(userId) {
+    const normalizedUserId = Number(userId);
+    if (!normalizedUserId) {
+      return null;
+    }
+
+    const conversation = state.conversations.find((item) => item.userId === normalizedUserId);
+    if (conversation) {
+      return {
+        id: conversation.userId,
+        userId: conversation.userId,
+        username: conversation.username,
+        avatarUrl: norm(conversation.avatarUrl),
+        online: Boolean(conversation.online),
+      };
+    }
+
+    const user = state.userMap.get(normalizedUserId);
+    return {
+      id: normalizedUserId,
+      userId: normalizedUserId,
+      username: (user && user.username) || `User ${normalizedUserId}`,
+      avatarUrl: norm(user && user.avatarUrl),
+      online: Boolean(user && user.online),
+    };
+  }
+
+  function getCallableGroupMembers() {
+    const selectedGroup = getSelectedGroup();
+    if (!selectedGroup) {
+      return [];
+    }
+
+    return (selectedGroup.members || [])
+      .filter((member) => member.id !== currentUser.id && member.online)
+      .map((member) => ({
+        id: Number(member.id),
+        username: member.username || `User ${member.id}`,
+        avatarUrl: norm(member.avatarUrl),
+        online: Boolean(member.online),
+      }))
+      .sort((left, right) => left.username.localeCompare(right.username));
+  }
+
   function getGroupTypingSet(groupId) {
     if (!state.typingGroups.has(groupId)) {
       state.typingGroups.set(groupId, new Set());
@@ -332,10 +389,29 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
 
-      paintAvatar(els.menuUserAvatar, selectedGroup.name, null);
+      paintAvatar(els.menuUserAvatar, selectedGroup.name, selectedGroup.avatarUrl);
       els.menuUsername.textContent = selectedGroup.name;
       els.menuUserStatus.textContent = `${selectedGroup.members.length} members`;
       els.menuUserStatus.style.color = "var(--muted)";
+
+      const changePhotoBtn = document.createElement("button");
+      changePhotoBtn.type = "button";
+      changePhotoBtn.className = "secondary-btn";
+      changePhotoBtn.textContent = selectedGroup.avatarUrl ? "Change Photo" : "Add Photo";
+      changePhotoBtn.addEventListener("click", () => {
+        toggleChatMenu(false);
+        els.groupAvatarInput.click();
+      });
+
+      const removePhotoBtn = document.createElement("button");
+      removePhotoBtn.type = "button";
+      removePhotoBtn.className = "secondary-btn";
+      removePhotoBtn.textContent = "Remove Photo";
+      removePhotoBtn.disabled = !selectedGroup.avatarUrl;
+      removePhotoBtn.addEventListener("click", async () => {
+        toggleChatMenu(false);
+        await updateGroupAvatar(null);
+      });
 
       const addMemberBtn = document.createElement("button");
       addMemberBtn.type = "button";
@@ -377,7 +453,7 @@ document.addEventListener("DOMContentLoaded", () => {
         membersWrap.appendChild(row);
       });
 
-      els.chatMenuExtra.append(addMemberBtn, heading, membersWrap);
+      els.chatMenuExtra.append(changePhotoBtn, removePhotoBtn, addMemberBtn, heading, membersWrap);
       return;
     }
 
@@ -461,20 +537,36 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function updateCallButtonState() {
     const selected = getSelectedConversation();
-    const callInProgress = Boolean(state.call.callId);
+    const callBusy = Boolean(state.call.callId || state.call.pendingIncoming);
+    const liveCall = Boolean(state.call.callId);
+    const callableGroupMembers = isGroupChatSelected() ? getCallableGroupMembers() : [];
     const canStartCall =
-      !callInProgress &&
-      isDirectChatSelected() &&
-      Boolean(selected && selected.online && selected.userId !== currentUser.id);
+      !callBusy &&
+      ((isDirectChatSelected() &&
+        Boolean(selected && selected.online && selected.userId !== currentUser.id)) ||
+        (isGroupChatSelected() && callableGroupMembers.length > 0));
 
     if (els.callToggleBtn) {
       els.callToggleBtn.disabled = !canStartCall;
-      els.callToggleBtn.classList.toggle("active", callInProgress);
+      els.callToggleBtn.classList.toggle("active", callBusy);
+      els.callToggleBtn.title = isGroupChatSelected() ? "Call an online group member" : "Start call";
+      els.callToggleBtn.setAttribute(
+        "aria-label",
+        isGroupChatSelected() ? "Call an online group member" : "Start call"
+      );
     }
 
     if (els.shareScreenBtn) {
-      els.shareScreenBtn.disabled = !callInProgress;
+      els.shareScreenBtn.disabled = !liveCall;
       els.shareScreenBtn.textContent = state.call.screenSharing ? "Stop Sharing" : "Share Screen";
+    }
+
+    if (els.toggleCallViewBtn) {
+      els.toggleCallViewBtn.disabled = !liveCall;
+    }
+
+    if (els.fullscreenCallBtn) {
+      els.fullscreenCallBtn.disabled = !liveCall;
     }
   }
 
@@ -550,7 +642,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const av = document.createElement("div");
       av.className = "avatar";
-      paintAvatar(av, group.name, null);
+      paintAvatar(av, group.name, group.avatarUrl);
 
       const main = document.createElement("div");
       main.className = "conversation-main";
@@ -830,6 +922,7 @@ document.addEventListener("DOMContentLoaded", () => {
       state.groups = groups.map((group) => ({
         id: group.id,
         name: group.name,
+        avatarUrl: norm(group.avatarUrl),
         createdAt: group.createdAt,
         members: Array.isArray(group.members)
           ? group.members.map((member) => {
@@ -859,7 +952,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (isGroupChatSelected() && state.groups.some((group) => group.id === state.selectedGroupId)) {
       const group = getSelectedGroup();
       state.selectedUsername = group.name;
-      state.selectedAvatarUrl = null;
+      state.selectedAvatarUrl = group.avatarUrl;
       setHeader();
       renderConversations();
       await loadMessages();
@@ -931,6 +1024,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const c = state.conversations.find((it) => it.userId === userId);
     if (!c) return;
     if (!isDirectChatSelected() || state.selectedUserId !== userId) stopTyping();
+    closeGroupCallModal();
     toggleChatMenu(false);
     state.selectedChatKind = CHAT.DIRECT;
     state.selectedUserId = userId;
@@ -949,12 +1043,13 @@ document.addEventListener("DOMContentLoaded", () => {
     const group = state.groups.find((item) => item.id === groupId);
     if (!group) return;
     if (!isGroupChatSelected() || state.selectedGroupId !== groupId) stopTyping();
+    closeGroupCallModal();
     toggleChatMenu(false);
     state.selectedChatKind = CHAT.GROUP;
     state.selectedGroupId = groupId;
     state.selectedUserId = null;
     state.selectedUsername = group.name;
-    state.selectedAvatarUrl = null;
+    state.selectedAvatarUrl = group.avatarUrl;
     state.unreadGroups.delete(groupId);
     clearGroupTyping(groupId);
     setHeader();
@@ -992,6 +1087,7 @@ document.addEventListener("DOMContentLoaded", () => {
       group = {
         id: m.groupId,
         name: `Group ${m.groupId}`,
+        avatarUrl: null,
         createdAt: m.createdAt,
         members: [],
         lastMessage: null,
@@ -1024,6 +1120,7 @@ document.addEventListener("DOMContentLoaded", () => {
       group = {
         id: groupData.id,
         name: groupData.name || `Group ${groupData.id}`,
+        avatarUrl: norm(groupData.avatarUrl),
         createdAt: groupData.createdAt || new Date().toISOString(),
         members: [],
         lastMessage: null,
@@ -1036,6 +1133,9 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     if (groupData.createdAt) {
       group.createdAt = groupData.createdAt;
+    }
+    if (Object.prototype.hasOwnProperty.call(groupData, "avatarUrl")) {
+      group.avatarUrl = norm(groupData.avatarUrl);
     }
     if (Array.isArray(groupData.members)) {
       group.members = groupData.members.map((member) => {
@@ -1061,7 +1161,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (isGroupChatSelected() && state.selectedGroupId === group.id) {
       state.selectedUsername = group.name;
-      state.selectedAvatarUrl = null;
+      state.selectedAvatarUrl = group.avatarUrl;
       setHeader();
     }
 
@@ -1275,6 +1375,43 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  async function updateGroupAvatar(avatarUrl) {
+    const selectedGroup = getSelectedGroup();
+    if (!selectedGroup) {
+      setStatus("Choose a group first.", true);
+      return;
+    }
+
+    try {
+      const response = await window.Api.updateGroupAvatar(selectedGroup.id, currentUser.id, avatarUrl);
+      if (response && response.group) {
+        upsertGroup(response.group);
+      }
+      setStatus(avatarUrl ? "Group photo updated." : "Group photo removed.", false);
+    } catch (e) {
+      setStatus(e.message, true);
+    }
+  }
+
+  async function uploadGroupAvatar(file) {
+    if (!file) {
+      return;
+    }
+    if (file.size > MAX_IMG) {
+      setStatus("Group image is too large. Use a file under 2 MB.", true);
+      return;
+    }
+
+    try {
+      setStatus("Uploading group photo...", false);
+      await updateGroupAvatar(await readDataUrl(file));
+    } catch (e) {
+      setStatus(e.message, true);
+    } finally {
+      els.groupAvatarInput.value = "";
+    }
+  }
+
   async function saveUsername() {
     const nextUsername = String(els.usernameInput.value || "").trim();
     if (!nextUsername) {
@@ -1305,6 +1442,86 @@ document.addEventListener("DOMContentLoaded", () => {
 
     els.groupModalStatus.textContent = message || "";
     els.groupModalStatus.style.color = isError ? "var(--danger)" : "var(--muted)";
+  }
+
+  function setGroupCallStatus(message, isError) {
+    if (!els.groupCallStatus) {
+      return;
+    }
+
+    els.groupCallStatus.textContent = message || "";
+    els.groupCallStatus.style.color = isError ? "var(--danger)" : "var(--muted)";
+  }
+
+  function closeGroupCallModal() {
+    if (!els.groupCallModal) {
+      return;
+    }
+
+    els.groupCallModal.classList.add("hidden");
+    els.groupCallMemberOptions.innerHTML = "";
+    setGroupCallStatus("", false);
+  }
+
+  function renderGroupCallOptions() {
+    if (!els.groupCallMemberOptions || !els.groupCallSubtitle) {
+      return;
+    }
+
+    const selectedGroup = getSelectedGroup();
+    const candidates = getCallableGroupMembers();
+
+    els.groupCallMemberOptions.innerHTML = "";
+    els.groupCallSubtitle.textContent = selectedGroup
+      ? `Choose who to call in ${selectedGroup.name}. Only online members are shown.`
+      : "Choose who you want to call.";
+
+    if (!candidates.length) {
+      const empty = document.createElement("p");
+      empty.className = "status";
+      empty.textContent = "Nobody else in this group is online right now.";
+      els.groupCallMemberOptions.appendChild(empty);
+      return;
+    }
+
+    candidates.forEach((candidate) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "group-member-option group-member-option-button";
+
+      const main = document.createElement("div");
+      main.className = "group-member-option-main";
+
+      const avatar = document.createElement("div");
+      avatar.className = "avatar";
+      paintAvatar(avatar, candidate.username, candidate.avatarUrl);
+
+      const meta = document.createElement("div");
+      meta.className = "group-member-option-meta";
+
+      const name = document.createElement("p");
+      name.className = "group-member-option-name";
+      name.textContent = candidate.username;
+
+      const status = document.createElement("p");
+      status.className = "group-member-option-status";
+      status.textContent = "Online now";
+
+      const action = document.createElement("span");
+      action.className = "group-member-option-action";
+      action.textContent = "Call";
+
+      meta.append(name, status);
+      main.append(avatar, meta);
+      button.append(main, action);
+
+      button.addEventListener("click", async () => {
+        closeGroupCallModal();
+        await startVoiceCall(candidate.id);
+      });
+
+      els.groupCallMemberOptions.appendChild(button);
+    });
   }
 
   function getGroupEditorCandidates() {
@@ -1631,6 +1848,97 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  function hasLiveVideo(stream) {
+    return Boolean(
+      stream &&
+        stream.getVideoTracks().some((track) => track && track.readyState === "live")
+    );
+  }
+
+  function isCallFullscreenActive() {
+    return Boolean(
+      document.fullscreenElement &&
+        els.callDock &&
+        els.callDock.contains(document.fullscreenElement)
+    );
+  }
+
+  function syncFullscreenButton() {
+    if (!els.fullscreenCallBtn) {
+      return;
+    }
+    els.fullscreenCallBtn.textContent = isCallFullscreenActive() ? "Exit Full Screen" : "Full Screen";
+  }
+
+  function syncCallDockLayout() {
+    if (!els.callDock) {
+      return;
+    }
+
+    els.callDock.classList.toggle("call-dock-collapsed", Boolean(state.call.mediaCollapsed));
+
+    if (els.toggleCallViewBtn) {
+      els.toggleCallViewBtn.textContent = state.call.mediaCollapsed ? "Show Video" : "Hide Video";
+    }
+
+    syncFullscreenButton();
+  }
+
+  function getPreferredFullscreenPanel() {
+    if (hasLiveVideo(state.call.screenStream) && els.localVideoPanel) {
+      return els.localVideoPanel;
+    }
+    if (hasLiveVideo(state.call.remoteStream) && els.remoteVideoPanel) {
+      return els.remoteVideoPanel;
+    }
+    return els.callDockMedia || els.callDock;
+  }
+
+  async function toggleCallMediaVisibility() {
+    if (!state.call.callId) {
+      return;
+    }
+
+    state.call.mediaCollapsed = !state.call.mediaCollapsed;
+    syncCallDockLayout();
+  }
+
+  async function toggleCallFullscreen(targetElement) {
+    if (!state.call.callId) {
+      return;
+    }
+
+    const fullscreenTarget = targetElement || getPreferredFullscreenPanel();
+    if (!fullscreenTarget || typeof fullscreenTarget.requestFullscreen !== "function") {
+      setStatus("Fullscreen is not supported in this browser.", true);
+      return;
+    }
+
+    try {
+      if (state.call.mediaCollapsed) {
+        state.call.mediaCollapsed = false;
+        syncCallDockLayout();
+      }
+
+      if (document.fullscreenElement === fullscreenTarget) {
+        if (typeof document.exitFullscreen === "function") {
+          await document.exitFullscreen();
+        }
+        return;
+      }
+
+      if (document.fullscreenElement && typeof document.exitFullscreen === "function") {
+        await document.exitFullscreen();
+      }
+
+      await fullscreenTarget.requestFullscreen();
+    } catch (_error) {
+      setStatus("Unable to toggle fullscreen mode.", true);
+    } finally {
+      syncFullscreenButton();
+    }
+  }
+
   function resetCallUi() {
     els.callDock.classList.add("hidden");
     els.callLabel.textContent = "Call";
@@ -1639,15 +1947,19 @@ document.addEventListener("DOMContentLoaded", () => {
     els.muteCallBtn.disabled = true;
     els.shareScreenBtn.textContent = "Share Screen";
     els.shareScreenBtn.disabled = true;
+    els.toggleCallViewBtn.disabled = true;
+    els.fullscreenCallBtn.disabled = true;
     els.endCallBtn.disabled = true;
     els.incomingCallModal.classList.add("hidden");
+    state.call.mediaCollapsed = false;
     syncLocalVideoPreview();
     syncRemoteMediaPreview();
+    syncCallDockLayout();
     updateCallButtonState();
   }
 
   function setCallUi(peerUserId, title, subtitle, isActive) {
-    const profile = state.userMap.get(peerUserId) || getSelectedConversation() || {};
+    const profile = getUserProfile(peerUserId) || getSelectedConversation() || {};
     paintAvatar(
       els.callAvatar,
       profile.username || state.selectedUsername || `User ${peerUserId}`,
@@ -1659,9 +1971,13 @@ document.addEventListener("DOMContentLoaded", () => {
     els.callDock.classList.remove("hidden");
     els.muteCallBtn.disabled = !isActive;
     els.shareScreenBtn.disabled = !state.call.callId;
+    els.toggleCallViewBtn.disabled = !state.call.callId;
+    els.fullscreenCallBtn.disabled = !state.call.callId;
     els.endCallBtn.disabled = false;
+    state.call.mediaCollapsed = false;
     syncLocalVideoPreview();
     syncRemoteMediaPreview();
+    syncCallDockLayout();
     updateCallButtonState();
   }
 
@@ -1676,9 +1992,16 @@ document.addEventListener("DOMContentLoaded", () => {
     if (state.call.callId) {
       els.shareScreenBtn.disabled = false;
     }
+    syncCallDockLayout();
   }
 
   function clearCallMedia() {
+    if (isCallFullscreenActive() && typeof document.exitFullscreen === "function") {
+      const exitPromise = document.exitFullscreen();
+      if (exitPromise && typeof exitPromise.catch === "function") {
+        exitPromise.catch(() => {});
+      }
+    }
     if (state.call.peerConnection) {
       state.call.peerConnection.ontrack = null;
       state.call.peerConnection.onicecandidate = null;
@@ -1701,6 +2024,7 @@ document.addEventListener("DOMContentLoaded", () => {
       state.call.screenStream = null;
     }
     state.call.screenSharing = false;
+    state.call.mediaCollapsed = false;
     state.call.videoSender = null;
     state.call.remoteStream = null;
     if (els.remoteAudio) {
@@ -1714,6 +2038,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     syncLocalVideoPreview();
     syncRemoteMediaPreview();
+    syncCallDockLayout();
   }
 
   async function ensureLocalMediaStream() {
@@ -1980,8 +2305,36 @@ document.addEventListener("DOMContentLoaded", () => {
     );
   }
 
-  async function startVoiceCall() {
-    const selected = getSelectedConversation();
+  async function startCallFromCurrentChat() {
+    if (state.call.callId || state.call.pendingIncoming) {
+      setStatus("A call is already in progress.", true);
+      return;
+    }
+
+    if (isGroupChatSelected()) {
+      const callableMembers = getCallableGroupMembers();
+      if (!callableMembers.length) {
+        setStatus("Nobody else in this group is online right now.", true);
+        return;
+      }
+
+      if (callableMembers.length === 1) {
+        closeGroupCallModal();
+        await startVoiceCall(callableMembers[0].id);
+        return;
+      }
+
+      renderGroupCallOptions();
+      setGroupCallStatus("", false);
+      els.groupCallModal.classList.remove("hidden");
+      return;
+    }
+
+    await startVoiceCall();
+  }
+
+  async function startVoiceCall(targetUserId = null) {
+    const selected = targetUserId ? getUserProfile(targetUserId) : getSelectedConversation();
     if (!socket.connected) {
       setStatus("Realtime connection is offline. Please reconnect and try again.", true);
       return;
@@ -1990,7 +2343,7 @@ document.addEventListener("DOMContentLoaded", () => {
       setStatus("The selected user is offline.", true);
       return;
     }
-    if (state.call.callId) {
+    if (state.call.callId || state.call.pendingIncoming) {
       setStatus("A call is already in progress.", true);
       return;
     }
@@ -2090,6 +2443,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
     state.call.pendingIncoming = null;
     els.incomingCallModal.classList.add("hidden");
+    updateCallButtonState();
   }
 
   function finishCall(notifyPeer, message) {
@@ -2153,10 +2507,12 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     state.call.pendingIncoming = { callId, fromUserId, offer };
+    closeGroupCallModal();
     resetRemoteIceState(true);
     const profile = state.userMap.get(fromUserId) || {};
     els.incomingCallLabel.textContent = `${profile.username || `User ${fromUserId}`} is calling you.`;
     els.incomingCallModal.classList.remove("hidden");
+    updateCallButtonState();
   }
 
   async function handleCallAnswer(payload) {
@@ -2277,8 +2633,15 @@ document.addEventListener("DOMContentLoaded", () => {
       if (Object.prototype.hasOwnProperty.call(data, "avatarUrl")) {
         state.selectedAvatarUrl = norm(data.avatarUrl);
       }
+      if (!els.groupCallModal.classList.contains("hidden")) {
+        renderGroupCallOptions();
+      }
       setHeader();
       return;
+    }
+
+    if (!els.groupCallModal.classList.contains("hidden")) {
+      renderGroupCallOptions();
     }
 
     if (isGroupChatSelected()) {
@@ -2444,6 +2807,9 @@ document.addEventListener("DOMContentLoaded", () => {
     els.profileAvatarInput.addEventListener("change", async () => {
       await uploadAvatar(els.profileAvatarInput.files && els.profileAvatarInput.files[0]);
     });
+    els.groupAvatarInput.addEventListener("change", async () => {
+      await uploadGroupAvatar(els.groupAvatarInput.files && els.groupAvatarInput.files[0]);
+    });
     els.saveUsernameBtn.addEventListener("click", saveUsername);
     els.usernameInput.addEventListener("keydown", async (e) => {
       if (e.key === "Enter") {
@@ -2489,7 +2855,7 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     els.callToggleBtn.addEventListener("click", async () => {
-      await startVoiceCall();
+      await startCallFromCurrentChat();
     });
     els.acceptCallBtn.addEventListener("click", async () => {
       await acceptIncomingCall();
@@ -2500,11 +2866,25 @@ document.addEventListener("DOMContentLoaded", () => {
     els.shareScreenBtn.addEventListener("click", async () => {
       await toggleScreenShare();
     });
+    els.toggleCallViewBtn.addEventListener("click", async () => {
+      await toggleCallMediaVisibility();
+    });
+    els.fullscreenCallBtn.addEventListener("click", async () => {
+      await toggleCallFullscreen();
+    });
     els.muteCallBtn.addEventListener("click", () => {
       toggleMuteCall();
     });
     els.endCallBtn.addEventListener("click", () => {
       finishCall(true, "Call ended.");
+    });
+    [els.remoteVideoPanel, els.localVideoPanel].forEach((panel) => {
+      if (!panel) {
+        return;
+      }
+      panel.addEventListener("dblclick", async () => {
+        await toggleCallFullscreen(panel);
+      });
     });
 
     els.closeGroupModalBtn.addEventListener("click", closeGroupEditor);
@@ -2521,6 +2901,13 @@ document.addEventListener("DOMContentLoaded", () => {
     els.groupModal.addEventListener("click", (e) => {
       if (e.target === els.groupModal) {
         closeGroupEditor();
+      }
+    });
+    els.closeGroupCallModalBtn.addEventListener("click", closeGroupCallModal);
+    els.cancelGroupCallBtn.addEventListener("click", closeGroupCallModal);
+    els.groupCallModal.addEventListener("click", (e) => {
+      if (e.target === els.groupCallModal) {
+        closeGroupCallModal();
       }
     });
 
@@ -2547,10 +2934,15 @@ document.addEventListener("DOMContentLoaded", () => {
         toggleChatMenu(false);
         els.emojiPanel.classList.add("hidden");
         closeGroupEditor();
+        closeGroupCallModal();
         if (state.call.pendingIncoming) {
           rejectIncomingCall();
         }
       }
+    });
+
+    document.addEventListener("fullscreenchange", () => {
+      syncFullscreenButton();
     });
 
     window.addEventListener("beforeunload", () => {

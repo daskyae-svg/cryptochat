@@ -113,6 +113,7 @@ async function createTables() {
     CREATE TABLE IF NOT EXISTS \`groups\` (
       id INT PRIMARY KEY AUTO_INCREMENT,
       name VARCHAR(255) NOT NULL,
+      avatar_url LONGTEXT NULL,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
   `;
@@ -151,6 +152,7 @@ async function createTables() {
   await pool.query(groupMessagesTableSql);
   await ensureUserColumns();
   await ensureMessageColumns();
+  await ensureGroupColumns();
 }
 
 async function columnExists(tableName, columnName) {
@@ -201,6 +203,14 @@ async function ensureUserColumns() {
     "users",
     "avatar_url",
     "avatar_url LONGTEXT NULL AFTER salt"
+  );
+}
+
+async function ensureGroupColumns() {
+  await ensureColumn(
+    "groups",
+    "avatar_url",
+    "avatar_url LONGTEXT NULL AFTER name"
   );
 }
 

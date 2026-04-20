@@ -62,6 +62,12 @@
         body: { requesterId, newUserId },
       });
     },
+    updateGroupAvatar(groupId, requesterId, avatarUrl) {
+      return request(`/groups/${groupId}/avatar`, {
+        method: "POST",
+        body: { requesterId, avatarUrl },
+      });
+    },
     fetchMessages(otherUserId, currentUserId) {
       const query = toQuery({ currentUserId });
       return request(`/messages/${otherUserId}?${query}`);
