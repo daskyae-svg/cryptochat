@@ -60,6 +60,18 @@ a {
   display: none !important;
 }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 button,
 input,
 textarea {
@@ -926,9 +938,17 @@ label {
 }
 
 .call-dock-media {
-  display: grid;
+  display: none;
   grid-template-columns: minmax(0, 1.75fr) minmax(180px, 0.9fr);
   gap: 10px;
+}
+
+.call-dock.call-dock-media-visible .call-dock-media {
+  display: grid;
+}
+
+.call-dock.call-dock-single-panel .call-dock-media {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .call-dock.call-dock-sharing .call-dock-media {
@@ -951,6 +971,10 @@ label {
   background: linear-gradient(145deg, #0f1726, #1b2741);
   border: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
   cursor: zoom-in;
+}
+
+.call-video-panel.panel-hidden {
+  display: none;
 }
 
 .call-video-panel video {
@@ -1036,12 +1060,53 @@ label {
 
 .call-dock-actions {
   display: flex;
-  gap: 8px;
+  gap: 12px;
   flex-wrap: wrap;
+  align-items: center;
 }
 
 .call-dock-actions button {
   white-space: nowrap;
+}
+
+.call-control-btn {
+  position: relative;
+  width: 74px;
+  height: 74px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  color: #fff;
+  background: #1e2127;
+  box-shadow: 0 10px 22px rgba(3, 8, 18, 0.26);
+}
+
+.call-control-btn svg {
+  width: 29px;
+  height: 29px;
+  display: block;
+}
+
+.call-control-btn.is-active {
+  outline: 4px dashed #ff3b30;
+  outline-offset: 4px;
+}
+
+.call-control-btn.is-muted {
+  background: #17191f;
+}
+
+.call-control-btn-danger {
+  background: #ff4f58;
+  border-color: transparent;
+}
+
+.call-control-btn[disabled] {
+  opacity: 0.45;
+  cursor: not-allowed;
+  box-shadow: none;
 }
 
 .emoji-panel {
@@ -1475,12 +1540,13 @@ label {
 
   .call-dock-actions {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    justify-items: center;
   }
 
-  .call-dock-actions .secondary-btn,
-  .call-dock-actions .danger-btn {
-    width: 100%;
+  .call-control-btn {
+    width: 68px;
+    height: 68px;
   }
 }
 
@@ -1526,6 +1592,6 @@ label {
   }
 
   .call-dock-actions {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }

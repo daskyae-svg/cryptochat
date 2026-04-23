@@ -613,7 +613,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (els.shareScreenBtn) {
       els.shareScreenBtn.disabled = !liveCall;
-      els.shareScreenBtn.textContent = state.call.screenSharing ? "Stop Sharing" : "Share Screen";
     }
 
     if (els.toggleCallViewBtn) {
@@ -621,8 +620,10 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     if (els.fullscreenCallBtn) {
-      els.fullscreenCallBtn.disabled = !liveCall;
+      els.fullscreenCallBtn.disabled = !callHasExpandedMedia();
     }
+
+    syncCallControlButtons();
   }
 
   function updatePresenceLabel() {
@@ -1977,19 +1978,25 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  function syncLocalVideoPreview() {
-    const previewStream = state.call.screenSharing ? state.call.screenStream : state.call.localStream;
-    const hasCameraPreview =
-      Boolean(state.call.localStream) &&
-      state.call.localStream.getVideoTracks().some((track) => track.readyState === "live");
+  function setCallControlLabel(button, label) {
+    if (!button) {
+      return;
+    }
 
-    els.localVideoLabel.textContent = state.call.screenSharing ? "Screen Share" : "You";
-    els.localVideoFallback.textContent = state.call.screenSharing
-      ? "Your screen preview"
-      : hasCameraPreview
-        ? "Camera preview"
-        : "Camera preview is unavailable.";
+    button.setAttribute("title", label);
+    button.setAttribute("aria-label", label);
+    const textNode = button.querySelector("[data-btn-label]");
+    if (textNode) {
+      textNode.textContent = label;
+    }
+  }
+
+  function syncLocalVideoPreview() {
+    const previewStream = state.call.screenSharing ? state.call.screenStream : null;
+    els.localVideoLabel.textContent = "Your Screen";
+    els.localVideoFallback.textContent = "Share your screen to present it in the call.";
     updateVideoElement(els.localVideo, els.localVideoFallback, previewStream, true);
+    syncCallDockLayout();
   }
 
   function syncRemoteMediaPreview() {
@@ -1997,6 +2004,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (els.remoteAudio) {
       els.remoteAudio.srcObject = state.call.remoteStream || null;
     }
+    syncCallDockLayout();
   }
 
   function hasLiveVideo(stream) {
@@ -2021,18 +2029,41 @@ document.addEventListener("DOMContentLoaded", () => {
     els.fullscreenCallBtn.textContent = isCallFullscreenActive() ? "Exit Full Screen" : "Full Screen";
   }
 
+  function callHasExpandedMedia() {
+    return Boolean(state.call.screenSharing || hasLiveVideo(state.call.remoteStream));
+  }
+
+  function syncCallControlButtons() {
+    setCallControlLabel(
+      els.shareScreenBtn,
+      state.call.screenSharing ? "Stop Sharing" : "Share Screen"
+    );
+    setCallControlLabel(els.muteCallBtn, state.call.muted ? "Unmute" : "Mute");
+    els.shareScreenBtn.classList.toggle("is-active", Boolean(state.call.screenSharing));
+    els.muteCallBtn.classList.toggle("is-muted", Boolean(state.call.muted));
+  }
+
   function syncCallDockLayout() {
     if (!els.callDock) {
       return;
     }
 
+    const hasLocalScreen = Boolean(state.call.screenSharing && hasLiveVideo(state.call.screenStream));
+    const hasRemoteVideo = hasLiveVideo(state.call.remoteStream);
+    const showMedia = !state.call.mediaCollapsed && (hasLocalScreen || hasRemoteVideo);
+
     els.callDock.classList.toggle("call-dock-collapsed", Boolean(state.call.mediaCollapsed));
     els.callDock.classList.toggle("call-dock-sharing", Boolean(state.call.screenSharing));
+    els.callDock.classList.toggle("call-dock-media-visible", showMedia);
+    els.callDock.classList.toggle("call-dock-single-panel", hasLocalScreen !== hasRemoteVideo);
+    els.localVideoPanel.classList.toggle("panel-hidden", !hasLocalScreen);
+    els.remoteVideoPanel.classList.toggle("panel-hidden", !hasRemoteVideo);
 
     if (els.toggleCallViewBtn) {
       els.toggleCallViewBtn.textContent = state.call.mediaCollapsed ? "Show Video" : "Hide Video";
     }
 
+    syncCallControlButtons();
     syncFullscreenButton();
   }
 
@@ -2095,9 +2126,7 @@ document.addEventListener("DOMContentLoaded", () => {
     els.callDock.classList.add("hidden");
     els.callLabel.textContent = "Call";
     els.callSubLabel.textContent = "";
-    els.muteCallBtn.textContent = "Mute";
     els.muteCallBtn.disabled = true;
-    els.shareScreenBtn.textContent = "Share Screen";
     els.shareScreenBtn.disabled = true;
     els.toggleCallViewBtn.disabled = true;
     els.fullscreenCallBtn.disabled = true;
@@ -2119,12 +2148,11 @@ document.addEventListener("DOMContentLoaded", () => {
     );
     els.callLabel.textContent = title;
     els.callSubLabel.textContent = subtitle || "";
-    els.muteCallBtn.textContent = "Mute";
     els.callDock.classList.remove("hidden");
     els.muteCallBtn.disabled = !isActive;
     els.shareScreenBtn.disabled = !state.call.callId;
     els.toggleCallViewBtn.disabled = !state.call.callId;
-    els.fullscreenCallBtn.disabled = !state.call.callId;
+    els.fullscreenCallBtn.disabled = !callHasExpandedMedia();
     els.endCallBtn.disabled = false;
     state.call.mediaCollapsed = false;
     syncLocalVideoPreview();
@@ -2144,6 +2172,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (state.call.callId) {
       els.shareScreenBtn.disabled = false;
     }
+    els.fullscreenCallBtn.disabled = !callHasExpandedMedia();
     syncCallDockLayout();
   }
 
@@ -2198,16 +2227,7 @@ document.addEventListener("DOMContentLoaded", () => {
       return state.call.localStream;
     }
 
-    let stream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
-    } catch (cameraError) {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
-      setStatus(
-        "Camera access was unavailable, so the call will continue with audio until you share a screen.",
-        true
-      );
-    }
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
 
     stream.getAudioTracks().forEach((track) => {
       track.enabled = !state.call.muted;
@@ -2347,9 +2367,8 @@ document.addEventListener("DOMContentLoaded", () => {
       track.enabled = !state.call.muted;
       pc.addTrack(track, stream);
     });
-    const [cameraTrack] = stream.getVideoTracks();
     if (state.call.videoSender) {
-      await state.call.videoSender.replaceTrack(cameraTrack || null);
+      await state.call.videoSender.replaceTrack(null);
     }
     syncLocalVideoPreview();
   }
@@ -2359,8 +2378,7 @@ document.addEventListener("DOMContentLoaded", () => {
       throw new Error("Screen sharing is not ready yet.");
     }
 
-    const [cameraTrack] = state.call.localStream ? state.call.localStream.getVideoTracks() : [];
-    await state.call.videoSender.replaceTrack(cameraTrack || null);
+    await state.call.videoSender.replaceTrack(null);
 
     if (state.call.screenStream) {
       state.call.screenStream.getTracks().forEach((track) => {
@@ -2655,7 +2673,7 @@ document.addEventListener("DOMContentLoaded", () => {
     state.call.localStream.getAudioTracks().forEach((track) => {
       track.enabled = !state.call.muted;
     });
-    els.muteCallBtn.textContent = state.call.muted ? "Unmute" : "Mute";
+    syncCallControlButtons();
   }
 
   function handleIncomingCall(payload) {

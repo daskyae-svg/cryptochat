@@ -134,8 +134,8 @@
               </div>
               <div id="localVideoPanel" class="call-video-panel local-panel">
                 <video id="localVideo" autoplay playsinline muted></video>
-                <div id="localVideoFallback" class="call-video-fallback">Click Share Screen when you want to present.</div>
-                <span id="localVideoLabel" class="call-video-label">Screen Share</span>
+                <div id="localVideoFallback" class="call-video-fallback">Share your screen to present it in the call.</div>
+                <span id="localVideoLabel" class="call-video-label">Your Screen</span>
               </div>
             </div>
             <div class="call-dock-meta">
@@ -147,11 +147,35 @@
                 </div>
               </div>
               <div class="call-dock-actions">
-                <button id="toggleCallViewBtn" type="button" class="secondary-btn">Hide Video</button>
-                <button id="fullscreenCallBtn" type="button" class="secondary-btn">Full Screen</button>
-                <button id="shareScreenBtn" type="button" class="secondary-btn">Share Screen</button>
-                <button id="muteCallBtn" type="button" class="secondary-btn">Mute</button>
-                <button id="endCallBtn" type="button" class="danger-btn">End</button>
+                <button id="toggleCallViewBtn" type="button" class="secondary-btn hidden" aria-hidden="true" tabindex="-1">Hide Video</button>
+                <button id="fullscreenCallBtn" type="button" class="secondary-btn hidden" aria-hidden="true" tabindex="-1">Full Screen</button>
+                <button id="shareScreenBtn" type="button" class="call-control-btn" title="Share Screen" aria-label="Share Screen">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M8 18h8" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+                    <path d="M12 6v8" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+                    <path d="M8.5 10.5L12 14l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+                    <rect x="4" y="4" width="16" height="11" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.7"/>
+                  </svg>
+                  <span class="sr-only" data-btn-label="1">Share Screen</span>
+                </button>
+                <button id="muteCallBtn" type="button" class="call-control-btn" title="Mute" aria-label="Mute">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M12 4.8a2.6 2.6 0 0 1 2.6 2.6v4.9a2.6 2.6 0 1 1-5.2 0V7.4A2.6 2.6 0 0 1 12 4.8z" fill="none" stroke="currentColor" stroke-width="1.9"/>
+                    <path d="M7.7 11.9a4.3 4.3 0 1 0 8.6 0" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+                    <path d="M12 16.2v3.2" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+                  </svg>
+                  <span class="sr-only" data-btn-label="1">Mute</span>
+                </button>
+                <button id="endCallBtn" type="button" class="call-control-btn call-control-btn-danger" title="End Call" aria-label="End Call">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M5.2 15.4c3.1-2.7 10.5-2.7 13.6 0" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                    <path d="M8.2 14.9v2.9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                    <path d="M15.8 14.9v2.9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                    <path d="M15.8 6.8l3.1 3.1" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+                    <path d="M18.9 6.8l-3.1 3.1" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
+                  </svg>
+                  <span class="sr-only">End Call</span>
+                </button>
               </div>
             </div>
           </section>
