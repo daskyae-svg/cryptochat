@@ -90,6 +90,7 @@ const MESSAGE_TYPES = {
   TEXT: "text",
   IMAGE: "image",
   GIF: "gif",
+  CALL: "call",
   DELETED: "deleted",
 };
 
@@ -98,6 +99,7 @@ const ALL_DB_TYPES = new Set([
   MESSAGE_TYPES.TEXT,
   MESSAGE_TYPES.IMAGE,
   MESSAGE_TYPES.GIF,
+  MESSAGE_TYPES.CALL,
   MESSAGE_TYPES.DELETED,
 ]);
 
@@ -247,6 +249,9 @@ function toPreviewText(message, maxLength = 45) {
 function messagePreviewFromType(messageType, messageText) {
   if (messageType === MESSAGE_TYPES.DELETED) {
     return "Message deleted";
+  }
+  if (messageType === MESSAGE_TYPES.CALL) {
+    return "Voice call";
   }
   if (messageType === MESSAGE_TYPES.IMAGE) {
     return messageText ? `Photo: ${toPreviewText(messageText, 36)}` : "Photo";
@@ -544,6 +549,197 @@ function groupConversationPreview(message, currentUserId) {
 
 function getGroupRoomName(groupId) {
   return `group_${groupId}`;
+}
+
+function buildDirectPairKey(userIdA, userIdB) {
+  const left = Math.min(Number(userIdA) || 0, Number(userIdB) || 0);
+  const right = Math.max(Number(userIdA) || 0, Number(userIdB) || 0);
+  return `${left}:${right}`;
+}
+
+async function getDirectInviteByPair(userIdA, userIdB) {
+  const db = getDb();
+  const [rows] = await db.execute(
+    `
+    SELECT id, sender_id, receiver_id, status, created_at, responded_at
+    FROM direct_invites
+    WHERE pair_key = ?
+    LIMIT 1
+    `,
+    [buildDirectPairKey(userIdA, userIdB)]
+  );
+
+  return rows[0] || null;
+}
+
+async function getDirectInviteById(inviteId) {
+  const db = getDb();
+  const [rows] = await db.execute(
+    `
+    SELECT id, sender_id, receiver_id, status, created_at, responded_at
+    FROM direct_invites
+    WHERE id = ?
+    LIMIT 1
+    `,
+    [inviteId]
+  );
+
+  return rows[0] || null;
+}
+
+function serializeDirectInvite(invite) {
+  if (!invite) {
+    return null;
+  }
+
+  return {
+    id: Number(invite.id),
+    senderId: Number(invite.sender_id),
+    receiverId: Number(invite.receiver_id),
+    status: String(invite.status || "pending"),
+    createdAt: toIsoString(invite.created_at),
+    respondedAt: invite.responded_at ? toIsoString(invite.responded_at) : null,
+  };
+}
+
+async function usersHaveDirectHistory(userIdA, userIdB) {
+  const db = getDb();
+  const [rows] = await db.execute(
+    `
+    SELECT 1
+    FROM messages
+    WHERE (
+      (sender_id = ? AND receiver_id = ?)
+      OR
+      (sender_id = ? AND receiver_id = ?)
+    )
+    LIMIT 1
+    `,
+    [userIdA, userIdB, userIdB, userIdA]
+  );
+
+  return rows.length > 0;
+}
+
+async function canUsersDirectlyInteract(userIdA, userIdB) {
+  if (!userIdA || !userIdB || userIdA === userIdB) {
+    return false;
+  }
+
+  const directInvite = await getDirectInviteByPair(userIdA, userIdB);
+  if (directInvite && directInvite.status === "accepted") {
+    return true;
+  }
+
+  return usersHaveDirectHistory(userIdA, userIdB);
+}
+
+async function ensureDirectAccess(userIdA, userIdB) {
+  const usersExist = await ensureUsersExist(userIdA, userIdB);
+  if (!usersExist) {
+    throw createHttpError(404, "Sender or receiver not found.");
+  }
+
+  const allowed = await canUsersDirectlyInteract(userIdA, userIdB);
+  if (!allowed) {
+    throw createHttpError(403, "Direct messaging is locked until the invite is accepted.");
+  }
+}
+
+function emitDirectInviteUpdate(senderId, receiverId, payload) {
+  emitToUser(senderId, "direct_invites_updated", payload);
+  if (receiverId !== senderId) {
+    emitToUser(receiverId, "direct_invites_updated", payload);
+  }
+}
+
+async function createDirectInvite(senderId, receiverId) {
+  if (!senderId || !receiverId || senderId === receiverId) {
+    throw createHttpError(400, "Valid senderId and receiverId are required.");
+  }
+
+  const usersExist = await ensureUsersExist(senderId, receiverId);
+  if (!usersExist) {
+    throw createHttpError(404, "One or both users were not found.");
+  }
+
+  if (await usersHaveDirectHistory(senderId, receiverId)) {
+    throw createHttpError(409, "This direct conversation already exists.");
+  }
+
+  const existingInvite = await getDirectInviteByPair(senderId, receiverId);
+  const db = getDb();
+
+  if (existingInvite) {
+    if (existingInvite.status === "accepted") {
+      throw createHttpError(409, "This invite has already been accepted.");
+    }
+    if (existingInvite.status === "pending") {
+      throw createHttpError(409, "There is already a pending invite between these users.");
+    }
+
+    await db.execute(
+      `
+      UPDATE direct_invites
+      SET sender_id = ?, receiver_id = ?, status = 'pending', created_at = CURRENT_TIMESTAMP, responded_at = NULL
+      WHERE id = ?
+      `,
+      [senderId, receiverId, existingInvite.id]
+    );
+
+    return getDirectInviteById(existingInvite.id);
+  }
+
+  const [result] = await db.execute(
+    `
+    INSERT INTO direct_invites (pair_key, sender_id, receiver_id, status)
+    VALUES (?, ?, ?, 'pending')
+    `,
+    [buildDirectPairKey(senderId, receiverId), senderId, receiverId]
+  );
+
+  return getDirectInviteById(result.insertId);
+}
+
+async function respondToDirectInvite(inviteId, userId, action) {
+  const normalizedAction = String(action || "").trim().toLowerCase();
+  if (normalizedAction !== "accept" && normalizedAction !== "reject") {
+    throw createHttpError(400, "Action must be accept or reject.");
+  }
+
+  const invite = await getDirectInviteById(inviteId);
+  if (!invite) {
+    throw createHttpError(404, "Invite not found.");
+  }
+  if (invite.receiver_id !== userId) {
+    throw createHttpError(403, "Only the invited user can respond.");
+  }
+  if (invite.status !== "pending") {
+    throw createHttpError(409, "This invite has already been handled.");
+  }
+
+  const db = getDb();
+  const nextStatus = normalizedAction === "accept" ? "accepted" : "rejected";
+  await db.execute(
+    `
+    UPDATE direct_invites
+    SET status = ?, responded_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+    `,
+    [nextStatus, inviteId]
+  );
+
+  return getDirectInviteById(inviteId);
+}
+
+async function persistCallLogMessage(callerId, calleeId) {
+  return persistEncryptedMessage({
+    senderId: callerId,
+    receiverId: calleeId,
+    messageText: "Voice call",
+    messageType: MESSAGE_TYPES.CALL,
+    mediaUrl: null,
+  });
 }
 
 async function findUsersByIds(userIds) {
@@ -1216,6 +1412,7 @@ app.post("/login", async (req, res) => {
 app.get("/users", async (req, res) => {
   try {
     const excludeId = toPositiveInt(req.query.exclude);
+    const viewerId = toPositiveInt(req.query.viewerId);
     const searchTerm = String(req.query.search || "").trim();
     const db = getDb();
     const params = [];
@@ -1231,7 +1428,39 @@ app.get("/users", async (req, res) => {
       params.push(`%${searchTerm}%`);
     }
 
-    let query = "SELECT id, username, avatar_url, created_at FROM users";
+    const relationSelectSql = viewerId
+      ? `,
+        (
+          SELECT di.id
+          FROM direct_invites di
+          WHERE di.pair_key = CONCAT(LEAST(${viewerId}, u.id), ':', GREATEST(${viewerId}, u.id))
+          LIMIT 1
+        ) AS direct_invite_id,
+        (
+          SELECT di.status
+          FROM direct_invites di
+          WHERE di.pair_key = CONCAT(LEAST(${viewerId}, u.id), ':', GREATEST(${viewerId}, u.id))
+          LIMIT 1
+        ) AS direct_invite_status,
+        (
+          SELECT di.sender_id
+          FROM direct_invites di
+          WHERE di.pair_key = CONCAT(LEAST(${viewerId}, u.id), ':', GREATEST(${viewerId}, u.id))
+          LIMIT 1
+        ) AS direct_invite_sender_id,
+        EXISTS(
+          SELECT 1
+          FROM messages dm
+          WHERE (
+            (dm.sender_id = ${viewerId} AND dm.receiver_id = u.id)
+            OR
+            (dm.sender_id = u.id AND dm.receiver_id = ${viewerId})
+          )
+          LIMIT 1
+        ) AS has_direct_history`
+      : "";
+
+    let query = `SELECT u.id, u.username, u.avatar_url, u.created_at${relationSelectSql} FROM users u`;
     if (conditions.length > 0) {
       query += ` WHERE ${conditions.join(" AND ")}`;
     }
@@ -1244,6 +1473,16 @@ app.get("/users", async (req, res) => {
       avatarUrl: row.avatar_url || null,
       online: isUserOnline(row.id),
       createdAt: toIsoString(row.created_at),
+      directInviteId: row.direct_invite_id || null,
+      directRelationStatus: viewerId
+        ? row.has_direct_history || row.direct_invite_status === "accepted"
+          ? "accepted"
+          : row.direct_invite_status === "pending"
+            ? Number(row.direct_invite_sender_id) === viewerId
+              ? "outgoing_pending"
+              : "incoming_pending"
+            : "none"
+        : null,
     }));
 
     return res.json({ users });
@@ -1373,7 +1612,7 @@ app.get("/conversations", async (req, res) => {
     }
 
     const db = getDb();
-    const params = [userId, userId, userId];
+    const params = [userId, userId, userId, userId, userId, userId, userId];
     let searchFilter = "";
     if (searchTerm) {
       searchFilter = " AND u.username LIKE ? ";
@@ -1408,6 +1647,25 @@ app.get("/conversations", async (req, res) => {
         LIMIT 1
       )
       WHERE u.id <> ?
+        AND (
+          EXISTS (
+            SELECT 1
+            FROM direct_invites di
+            WHERE di.pair_key = CONCAT(LEAST(?, u.id), ':', GREATEST(?, u.id))
+              AND di.status = 'accepted'
+            LIMIT 1
+          )
+          OR EXISTS (
+            SELECT 1
+            FROM messages dm
+            WHERE (
+              (dm.sender_id = ? AND dm.receiver_id = u.id)
+              OR
+              (dm.sender_id = u.id AND dm.receiver_id = ?)
+            )
+            LIMIT 1
+          )
+        )
       ${searchFilter}
       ORDER BY
         CASE WHEN m.created_at IS NULL THEN 1 ELSE 0 END ASC,
@@ -1456,6 +1714,65 @@ app.get("/conversations", async (req, res) => {
   } catch (error) {
     console.error("[conversations] failed:", error);
     return res.status(500).json({ error: "Failed to load conversations." });
+  }
+});
+
+app.post("/direct-invites", async (req, res) => {
+  try {
+    const senderId = toPositiveInt(req.body.senderId);
+    const receiverId = toPositiveInt(req.body.receiverId);
+
+    if (!senderId || !receiverId) {
+      return res.status(400).json({ error: "Valid senderId and receiverId are required." });
+    }
+
+    const invite = await createDirectInvite(senderId, receiverId);
+    const payload = {
+      action: "sent",
+      invite: serializeDirectInvite(invite),
+    };
+    emitDirectInviteUpdate(senderId, receiverId, payload);
+
+    return res.status(201).json({
+      message: "Invite sent.",
+      invite: payload.invite,
+    });
+  } catch (error) {
+    const status = error.status || 500;
+    if (status >= 500) {
+      console.error("[direct-invites:create] failed:", error);
+    }
+    return res.status(status).json({ error: error.message || "Failed to send invite." });
+  }
+});
+
+app.post("/direct-invites/:id/respond", async (req, res) => {
+  try {
+    const inviteId = toPositiveInt(req.params.id);
+    const userId = toPositiveInt(req.body.userId);
+    const action = String(req.body.action || "").trim().toLowerCase();
+
+    if (!inviteId || !userId) {
+      return res.status(400).json({ error: "Valid invite id and userId are required." });
+    }
+
+    const invite = await respondToDirectInvite(inviteId, userId, action);
+    const payload = {
+      action: invite.status === "accepted" ? "accepted" : "rejected",
+      invite: serializeDirectInvite(invite),
+    };
+    emitDirectInviteUpdate(invite.sender_id, invite.receiver_id, payload);
+
+    return res.json({
+      message: invite.status === "accepted" ? "Invite accepted." : "Invite declined.",
+      invite: payload.invite,
+    });
+  } catch (error) {
+    const status = error.status || 500;
+    if (status >= 500) {
+      console.error("[direct-invites:respond] failed:", error);
+    }
+    return res.status(status).json({ error: error.message || "Failed to respond to invite." });
   }
 });
 
@@ -1764,6 +2081,7 @@ app.post("/send-message", async (req, res) => {
     if (!usersExist) {
       return res.status(404).json({ error: "Sender or receiver not found." });
     }
+    await ensureDirectAccess(senderId, receiverId);
 
     const savedMessage = await persistEncryptedMessage({
       senderId,
@@ -1798,8 +2116,11 @@ app.post("/send-message", async (req, res) => {
       data: senderPayload,
     });
   } catch (error) {
-    console.error("[send-message] failed:", error);
-    return res.status(500).json({ error: "Failed to send message." });
+    const status = error.status || 500;
+    if (status >= 500) {
+      console.error("[send-message] failed:", error);
+    }
+    return res.status(status).json({ error: error.message || "Failed to send message." });
   }
 });
 
@@ -1840,6 +2161,7 @@ app.get("/messages/:userId", async (req, res) => {
         .status(400)
         .json({ error: "currentUserId query param and userId param are required." });
     }
+    await ensureDirectAccess(currentUserId, otherUserId);
 
     const db = getDb();
     const [rows] = await db.execute(
@@ -1864,8 +2186,11 @@ app.get("/messages/:userId", async (req, res) => {
 
     return res.json({ messages });
   } catch (error) {
-    console.error("[messages] failed:", error);
-    return res.status(500).json({ error: "Failed to fetch messages." });
+    const status = error.status || 500;
+    if (status >= 500) {
+      console.error("[messages] failed:", error);
+    }
+    return res.status(status).json({ error: error.message || "Failed to fetch messages." });
   }
 });
 
@@ -2013,36 +2338,52 @@ io.on("connection", (socket) => {
     }
   });
 
-  socket.on("typing", (payload) => {
-    const senderId = toPositiveInt(payload && payload.senderId);
-    const receiverId = toPositiveInt(payload && payload.receiverId);
-    const registeredUserId = toPositiveInt(socket.data.userId);
+  socket.on("typing", async (payload) => {
+    try {
+      const senderId = toPositiveInt(payload && payload.senderId);
+      const receiverId = toPositiveInt(payload && payload.receiverId);
+      const registeredUserId = toPositiveInt(socket.data.userId);
 
-    if (!senderId || !receiverId) {
-      return;
+      if (!senderId || !receiverId) {
+        return;
+      }
+
+      if (registeredUserId && senderId !== registeredUserId) {
+        return;
+      }
+
+      if (!(await canUsersDirectlyInteract(senderId, receiverId))) {
+        return;
+      }
+
+      emitToUser(receiverId, "typing", { senderId, receiverId });
+    } catch (error) {
+      console.error("[socket typing] failed:", error);
     }
-
-    if (registeredUserId && senderId !== registeredUserId) {
-      return;
-    }
-
-    emitToUser(receiverId, "typing", { senderId, receiverId });
   });
 
-  socket.on("stop_typing", (payload) => {
-    const senderId = toPositiveInt(payload && payload.senderId);
-    const receiverId = toPositiveInt(payload && payload.receiverId);
-    const registeredUserId = toPositiveInt(socket.data.userId);
+  socket.on("stop_typing", async (payload) => {
+    try {
+      const senderId = toPositiveInt(payload && payload.senderId);
+      const receiverId = toPositiveInt(payload && payload.receiverId);
+      const registeredUserId = toPositiveInt(socket.data.userId);
 
-    if (!senderId || !receiverId) {
-      return;
+      if (!senderId || !receiverId) {
+        return;
+      }
+
+      if (registeredUserId && senderId !== registeredUserId) {
+        return;
+      }
+
+      if (!(await canUsersDirectlyInteract(senderId, receiverId))) {
+        return;
+      }
+
+      emitToUser(receiverId, "stop_typing", { senderId, receiverId });
+    } catch (error) {
+      console.error("[socket stop_typing] failed:", error);
     }
-
-    if (registeredUserId && senderId !== registeredUserId) {
-      return;
-    }
-
-    emitToUser(receiverId, "stop_typing", { senderId, receiverId });
   });
 
   socket.on("group_typing", async (payload) => {
@@ -2099,6 +2440,75 @@ io.on("connection", (socket) => {
     }
   });
 
+  socket.on("send_direct_invite", async (payload, callback) => {
+    try {
+      const senderId = toPositiveInt(payload && payload.senderId);
+      const receiverId = toPositiveInt(payload && payload.receiverId);
+      const registeredUserId = toPositiveInt(socket.data.userId);
+
+      if (!senderId || !receiverId) {
+        throw createHttpError(400, "senderId and receiverId are required.");
+      }
+      if (registeredUserId && senderId !== registeredUserId) {
+        throw createHttpError(403, "Invalid sender identity.");
+      }
+
+      const invite = await createDirectInvite(senderId, receiverId);
+      const message = {
+        action: "sent",
+        invite: serializeDirectInvite(invite),
+      };
+      emitDirectInviteUpdate(senderId, receiverId, message);
+
+      if (typeof callback === "function") {
+        callback({ ok: true, message });
+      }
+    } catch (error) {
+      if ((error.status || 500) >= 500) {
+        console.error("[socket send_direct_invite] failed:", error);
+      }
+
+      if (typeof callback === "function") {
+        callback({ ok: false, error: error.message || "Failed to send invite." });
+      }
+    }
+  });
+
+  socket.on("respond_direct_invite", async (payload, callback) => {
+    try {
+      const inviteId = toPositiveInt(payload && payload.inviteId);
+      const userId = toPositiveInt(payload && payload.userId);
+      const action = String((payload && payload.action) || "").trim().toLowerCase();
+      const registeredUserId = toPositiveInt(socket.data.userId);
+
+      if (!inviteId || !userId) {
+        throw createHttpError(400, "inviteId and userId are required.");
+      }
+      if (registeredUserId && userId !== registeredUserId) {
+        throw createHttpError(403, "Invalid user identity.");
+      }
+
+      const invite = await respondToDirectInvite(inviteId, userId, action);
+      const message = {
+        action: invite.status === "accepted" ? "accepted" : "rejected",
+        invite: serializeDirectInvite(invite),
+      };
+      emitDirectInviteUpdate(invite.sender_id, invite.receiver_id, message);
+
+      if (typeof callback === "function") {
+        callback({ ok: true, message });
+      }
+    } catch (error) {
+      if ((error.status || 500) >= 500) {
+        console.error("[socket respond_direct_invite] failed:", error);
+      }
+
+      if (typeof callback === "function") {
+        callback({ ok: false, error: error.message || "Failed to respond to invite." });
+      }
+    }
+  });
+
   socket.on("send_message", async (payload, callback) => {
     try {
       const senderId = toPositiveInt(payload && payload.senderId);
@@ -2139,6 +2549,7 @@ io.on("connection", (socket) => {
       if (!usersExist) {
         throw createHttpError(404, "Sender or receiver not found.");
       }
+      await ensureDirectAccess(senderId, receiverId);
 
       const savedMessage = await persistEncryptedMessage({
         senderId,
@@ -2322,7 +2733,7 @@ io.on("connection", (socket) => {
     }
   });
 
-  const relayCallOffer = (payload, callback) => {
+  const relayCallOffer = async (payload, callback) => {
     try {
       const fromUserId = toPositiveInt(payload && (payload.fromUserId ?? payload.from));
       const toUserId = toPositiveInt(payload && (payload.toUserId ?? payload.to));
@@ -2339,9 +2750,28 @@ io.on("connection", (socket) => {
       if (registeredUserId && fromUserId !== registeredUserId) {
         throw createHttpError(403, "Invalid caller identity.");
       }
+      await ensureDirectAccess(fromUserId, toUserId);
       if (!isUserOnline(toUserId)) {
         throw createHttpError(409, "The selected user is offline.");
       }
+
+      const callMessage = await persistCallLogMessage(fromUserId, toUserId);
+      const senderMessage = {
+        ...callMessage,
+        status: "delivered",
+      };
+      const receiverMessage = {
+        ...callMessage,
+        status: "delivered",
+      };
+
+      emitToUser(fromUserId, "receive_message", senderMessage);
+      emitToUser(toUserId, "receive_message", receiverMessage);
+      emitToUser(fromUserId, "message_status", {
+        messageId: callMessage.id,
+        status: "delivered",
+        receiverId: toUserId,
+      });
 
       const outgoingPayload = {
         callId,

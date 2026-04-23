@@ -7,7 +7,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   const $ = (id) => document.getElementById(id);
   const CHAT = { DIRECT: "direct", GROUP: "group" };
-  const MSG = { TEXT: "text", IMAGE: "image", GIF: "gif", DELETED: "deleted" };
+  const MSG = { TEXT: "text", IMAGE: "image", GIF: "gif", CALL: "call", DELETED: "deleted" };
   const CALL = { IDLE: "idle", DIALING: "dialing", CONNECTING: "connecting", ACTIVE: "active" };
   const EMOJIS = [
     "\uD83D\uDE00",
@@ -21,6 +21,16 @@ document.addEventListener("DOMContentLoaded", () => {
     "\uD83D\uDC4D",
     "\uD83E\uDD16",
   ];
+  const CALL_ICONS = {
+    previewHidden:
+      '<path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5v7A2.5 2.5 0 0 1 17.5 17h-11A2.5 2.5 0 0 1 4 14.5z" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M8 12h8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M6 18L18 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
+    previewShown:
+      '<path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5v7A2.5 2.5 0 0 1 17.5 17h-11A2.5 2.5 0 0 1 4 14.5z" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M8.2 12c1.1-1.6 2.4-2.4 3.8-2.4s2.7.8 3.8 2.4c-1.1 1.6-2.4 2.4-3.8 2.4S9.3 13.6 8.2 12z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><circle cx="12" cy="12" r="1.5" fill="none" stroke="currentColor" stroke-width="1.7"/>',
+    micOn:
+      '<path d="M12 4.8a2.6 2.6 0 0 1 2.6 2.6v4.9a2.6 2.6 0 1 1-5.2 0V7.4A2.6 2.6 0 0 1 12 4.8z" fill="none" stroke="currentColor" stroke-width="1.9"/><path d="M7.7 11.9a4.3 4.3 0 1 0 8.6 0" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/><path d="M12 16.2v3.2" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>',
+    micOff:
+      '<path d="M12 4.8a2.6 2.6 0 0 1 2.6 2.6v4.9a2.6 2.6 0 0 1-.6 1.7" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/><path d="M9.8 9.6v2.7a2.2 2.2 0 0 0 3.8 1.5" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/><path d="M7.7 11.9a4.3 4.3 0 0 0 6.9 3.4" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/><path d="M12 16.2v3.2" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/><path d="M6.2 6.2l11.6 11.6" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>',
+  };
 
   const els = {
     currentUserLabel: $("currentUserLabel"),
@@ -40,6 +50,9 @@ document.addEventListener("DOMContentLoaded", () => {
     statusMessage: $("statusMessage"),
     conversationList: $("conversationList"),
     userSearchInput: $("userSearchInput"),
+    inviteBtn: $("inviteBtn"),
+    inviteBtnLabel: $("inviteBtnLabel"),
+    inviteBtnBadge: $("inviteBtnBadge"),
     newGroupBtn: $("newGroupBtn"),
     messagesContainer: $("messagesContainer"),
     messageForm: $("messageForm"),
@@ -102,6 +115,12 @@ document.addEventListener("DOMContentLoaded", () => {
     saveGroupBtn: $("saveGroupBtn"),
     cancelGroupBtn: $("cancelGroupBtn"),
     closeGroupModalBtn: $("closeGroupModalBtn"),
+    inviteModal: $("inviteModal"),
+    inviteSearchInput: $("inviteSearchInput"),
+    inviteUserOptions: $("inviteUserOptions"),
+    inviteModalStatus: $("inviteModalStatus"),
+    closeInviteModalBtn: $("closeInviteModalBtn"),
+    cancelInviteBtn: $("cancelInviteBtn"),
     groupCallModal: $("groupCallModal"),
     groupCallSubtitle: $("groupCallSubtitle"),
     groupCallMemberOptions: $("groupCallMemberOptions"),
@@ -134,6 +153,8 @@ document.addEventListener("DOMContentLoaded", () => {
       groupId: null,
       selectedUserIds: new Set(),
     },
+    inviteDirectory: [],
+    inviteSearchTerm: "",
     mobileChatOpen: false,
     call: {
       status: CALL.IDLE,
@@ -382,6 +403,228 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  function setInviteModalStatus(message, isError) {
+    if (!els.inviteModalStatus) {
+      return;
+    }
+
+    els.inviteModalStatus.textContent = message || "";
+    els.inviteModalStatus.style.color = isError ? "var(--danger)" : "var(--muted)";
+  }
+
+  function getInvitePriority(user) {
+    switch (user && user.directRelationStatus) {
+      case "incoming_pending":
+        return 0;
+      case "none":
+        return 1;
+      case "outgoing_pending":
+        return 2;
+      case "accepted":
+        return 3;
+      default:
+        return 4;
+    }
+  }
+
+  function countIncomingInvites() {
+    return state.inviteDirectory.filter((user) => user.directRelationStatus === "incoming_pending").length;
+  }
+
+  function updateInviteButtonState() {
+    const incomingCount = countIncomingInvites();
+    if (els.inviteBtnLabel) {
+      els.inviteBtnLabel.textContent = incomingCount ? "Invites" : "Privacy";
+    }
+    if (els.inviteBtnBadge) {
+      els.inviteBtnBadge.textContent = String(incomingCount);
+      els.inviteBtnBadge.classList.toggle("hidden", incomingCount < 1);
+    }
+  }
+
+  async function loadInviteDirectory() {
+    try {
+      const { users = [] } = await window.Api.fetchUsers(currentUser.id, "", currentUser.id);
+      state.inviteDirectory = users
+        .map((user) => {
+          const normalizedUser = {
+            id: Number(user.id),
+            username: user.username || `User ${user.id}`,
+            avatarUrl: norm(user.avatarUrl),
+            online: Boolean(user.online),
+            directInviteId: user.directInviteId ? Number(user.directInviteId) : null,
+            directRelationStatus: user.directRelationStatus || "none",
+          };
+          state.userMap.set(normalizedUser.id, {
+            username: normalizedUser.username,
+            avatarUrl: normalizedUser.avatarUrl,
+            online: normalizedUser.online,
+          });
+          return normalizedUser;
+        })
+        .sort((left, right) => {
+          const priorityDiff = getInvitePriority(left) - getInvitePriority(right);
+          return priorityDiff || left.username.localeCompare(right.username);
+        });
+
+      updateInviteButtonState();
+      if (els.inviteModal && !els.inviteModal.classList.contains("hidden")) {
+        renderInviteDirectory();
+      }
+    } catch (error) {
+      setInviteModalStatus(error.message, true);
+      setStatus(error.message, true);
+    }
+  }
+
+  function renderInviteDirectory() {
+    if (!els.inviteUserOptions) {
+      return;
+    }
+
+    els.inviteUserOptions.innerHTML = "";
+    const filterTerm = String(state.inviteSearchTerm || "").trim().toLowerCase();
+    const visibleUsers = state.inviteDirectory.filter((user) =>
+      !filterTerm || user.username.toLowerCase().includes(filterTerm)
+    );
+
+    if (!visibleUsers.length) {
+      const empty = document.createElement("p");
+      empty.className = "status";
+      empty.textContent = filterTerm
+        ? "No users match your search."
+        : "No users available yet.";
+      els.inviteUserOptions.appendChild(empty);
+      return;
+    }
+
+    visibleUsers.forEach((user) => {
+      const row = document.createElement("div");
+      row.className = "group-member-option invite-option";
+
+      const main = document.createElement("div");
+      main.className = "group-member-option-main";
+
+      const avatar = document.createElement("div");
+      avatar.className = "avatar";
+      paintAvatar(avatar, user.username, user.avatarUrl);
+
+      const meta = document.createElement("div");
+      meta.className = "group-member-option-meta";
+
+      const name = document.createElement("p");
+      name.className = "group-member-option-name";
+      name.textContent = user.username;
+
+      const status = document.createElement("p");
+      status.className = "group-member-option-status";
+      status.textContent = user.online ? "Online" : "Offline";
+
+      meta.append(name, status);
+      main.append(avatar, meta);
+
+      const actions = document.createElement("div");
+      actions.className = "invite-option-actions";
+
+      if (user.directRelationStatus === "accepted") {
+        const pill = document.createElement("span");
+        pill.className = "invite-pill connected";
+        pill.textContent = "Connected";
+        actions.appendChild(pill);
+      } else if (user.directRelationStatus === "outgoing_pending") {
+        const pill = document.createElement("span");
+        pill.className = "invite-pill pending";
+        pill.textContent = "Pending";
+        actions.appendChild(pill);
+      } else if (user.directRelationStatus === "incoming_pending" && user.directInviteId) {
+        const acceptBtn = document.createElement("button");
+        acceptBtn.type = "button";
+        acceptBtn.className = "secondary-btn";
+        acceptBtn.textContent = "Accept";
+        acceptBtn.addEventListener("click", async () => {
+          await respondDirectInvite(user.directInviteId, "accept");
+        });
+
+        const declineBtn = document.createElement("button");
+        declineBtn.type = "button";
+        declineBtn.className = "secondary-btn";
+        declineBtn.textContent = "Decline";
+        declineBtn.addEventListener("click", async () => {
+          await respondDirectInvite(user.directInviteId, "reject");
+        });
+
+        actions.append(acceptBtn, declineBtn);
+      } else {
+        const inviteBtn = document.createElement("button");
+        inviteBtn.type = "button";
+        inviteBtn.className = "secondary-btn";
+        inviteBtn.textContent = "Invite";
+        inviteBtn.addEventListener("click", async () => {
+          await sendDirectInvite(user.id);
+        });
+        actions.appendChild(inviteBtn);
+      }
+
+      row.append(main, actions);
+      els.inviteUserOptions.appendChild(row);
+    });
+  }
+
+  async function sendDirectInvite(userId) {
+    try {
+      setInviteModalStatus("", false);
+      if (socket.connected) {
+        await emitAck("send_direct_invite", {
+          senderId: currentUser.id,
+          receiverId: userId,
+        });
+      } else {
+        await window.Api.sendDirectInvite(currentUser.id, userId);
+      }
+
+      await loadInviteDirectory();
+      setInviteModalStatus("Invite sent.", false);
+    } catch (error) {
+      setInviteModalStatus(error.message, true);
+    }
+  }
+
+  async function respondDirectInvite(inviteId, action) {
+    try {
+      setInviteModalStatus("", false);
+      if (socket.connected) {
+        await emitAck("respond_direct_invite", {
+          inviteId,
+          userId: currentUser.id,
+          action,
+        });
+      } else {
+        await window.Api.respondDirectInvite(inviteId, currentUser.id, action);
+      }
+
+      await refreshChatLists();
+      setInviteModalStatus(action === "accept" ? "Invite accepted." : "Invite declined.", false);
+    } catch (error) {
+      setInviteModalStatus(error.message, true);
+    }
+  }
+
+  async function openInviteModal() {
+    setInviteModalStatus("", false);
+    toggleChatMenu(false);
+    setSettings(false);
+    els.inviteModal.classList.remove("hidden");
+    els.inviteSearchInput.value = state.inviteSearchTerm;
+    await loadInviteDirectory();
+    renderInviteDirectory();
+    els.inviteSearchInput.focus();
+  }
+
+  function closeInviteModal() {
+    setInviteModalStatus("", false);
+    els.inviteModal.classList.add("hidden");
+  }
+
   function getGroupTypingLabel(group) {
     if (!group) {
       return "";
@@ -535,6 +778,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const isOpenConv = (m) => isOpenDirectMessage(m) || isOpenGroupMessage(m);
   const preview = (type, text) => {
     if (type === MSG.DELETED) return "Message deleted";
+    if (type === MSG.CALL) return "Voice call";
     if (type === MSG.IMAGE) return text ? `Photo: ${text}` : "Photo";
     if (type === MSG.GIF) return text ? `GIF: ${text}` : "GIF";
     return (String(text || "").replace(/\s+/g, " ").trim() || "Start chatting").slice(0, 70);
@@ -616,7 +860,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     if (els.toggleCallViewBtn) {
-      els.toggleCallViewBtn.disabled = !liveCall;
+      els.toggleCallViewBtn.disabled = !callHasExpandedMedia();
     }
 
     if (els.fullscreenCallBtn) {
@@ -647,7 +891,6 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       const onlineMembers = (selectedGroup.members || []).filter((member) => member.online).length;
-      els.activeUserPresence.textContent = `${selectedGroup.members.length} members • ${onlineMembers} online`;
       els.activeUserPresence.textContent = `${selectedGroup.members.length} members | ${onlineMembers} online`;
       els.activeUserPresence.style.color = "var(--muted)";
       return;
@@ -897,6 +1140,29 @@ document.addEventListener("DOMContentLoaded", () => {
       p.className = "message-deleted";
       p.textContent = "This message was deleted.";
       bubble.appendChild(p);
+    } else if (m.messageType === MSG.CALL) {
+      const callWrap = document.createElement("div");
+      callWrap.className = "message-call";
+
+      const icon = document.createElement("span");
+      icon.className = "message-call-icon";
+      icon.innerHTML =
+        '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5.5 4.5a2 2 0 0 1 2.2-1.96l2.44.26a2 2 0 0 1 1.75 1.45l.5 1.8a2 2 0 0 1-.58 2.02L10.37 9.5a14.62 14.62 0 0 0 4.14 4.14l1.43-1.43a2 2 0 0 1 2.02-.58l1.8.5a2 2 0 0 1 1.45 1.75l.26 2.44a2 2 0 0 1-1.96 2.2h-1A15 15 0 0 1 4.5 5.5v-1z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+      const copy = document.createElement("div");
+      copy.className = "message-call-copy";
+
+      const title = document.createElement("p");
+      title.className = "message-call-title";
+      title.textContent = self ? "You started a call" : "Voice call";
+
+      const subtitle = document.createElement("p");
+      subtitle.className = "message-call-subtitle";
+      subtitle.textContent = self ? "Call activity saved to this chat." : "Call activity shared in this chat.";
+
+      copy.append(title, subtitle);
+      callWrap.append(icon, copy);
+      bubble.appendChild(callWrap);
     } else if (String(m.message || "").trim()) {
       bubble.appendChild(htmlWithLinks(m.message));
     }
@@ -1055,7 +1321,11 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   async function refreshChatLists() {
-    await Promise.all([loadConversations(), loadGroups()]);
+    await Promise.all([
+      loadConversations(),
+      loadGroups(),
+      loadInviteDirectory(),
+    ]);
     renderConversations();
     await ensureActiveSelection();
   }
@@ -1991,6 +2261,17 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
+  function setCallControlIcon(button, markup) {
+    if (!button || !markup) {
+      return;
+    }
+
+    const iconNode = button.querySelector("[data-call-icon]");
+    if (iconNode) {
+      iconNode.innerHTML = markup;
+    }
+  }
+
   function syncLocalVideoPreview() {
     const previewStream = state.call.screenSharing ? state.call.screenStream : null;
     els.localVideoLabel.textContent = "Your Screen";
@@ -2038,7 +2319,16 @@ document.addEventListener("DOMContentLoaded", () => {
       els.shareScreenBtn,
       state.call.screenSharing ? "Stop Sharing" : "Share Screen"
     );
+    setCallControlLabel(
+      els.toggleCallViewBtn,
+      state.call.mediaCollapsed ? "Show Preview" : "Hide Preview"
+    );
     setCallControlLabel(els.muteCallBtn, state.call.muted ? "Unmute" : "Mute");
+    setCallControlIcon(
+      els.toggleCallViewBtn,
+      state.call.mediaCollapsed ? CALL_ICONS.previewShown : CALL_ICONS.previewHidden
+    );
+    setCallControlIcon(els.muteCallBtn, state.call.muted ? CALL_ICONS.micOff : CALL_ICONS.micOn);
     els.shareScreenBtn.classList.toggle("is-active", Boolean(state.call.screenSharing));
     els.muteCallBtn.classList.toggle("is-muted", Boolean(state.call.muted));
   }
@@ -2058,10 +2348,6 @@ document.addEventListener("DOMContentLoaded", () => {
     els.callDock.classList.toggle("call-dock-single-panel", hasLocalScreen !== hasRemoteVideo);
     els.localVideoPanel.classList.toggle("panel-hidden", !hasLocalScreen);
     els.remoteVideoPanel.classList.toggle("panel-hidden", !hasRemoteVideo);
-
-    if (els.toggleCallViewBtn) {
-      els.toggleCallViewBtn.textContent = state.call.mediaCollapsed ? "Show Video" : "Hide Video";
-    }
 
     syncCallControlButtons();
     syncFullscreenButton();
@@ -2151,7 +2437,7 @@ document.addEventListener("DOMContentLoaded", () => {
     els.callDock.classList.remove("hidden");
     els.muteCallBtn.disabled = !isActive;
     els.shareScreenBtn.disabled = !state.call.callId;
-    els.toggleCallViewBtn.disabled = !state.call.callId;
+    els.toggleCallViewBtn.disabled = !callHasExpandedMedia();
     els.fullscreenCallBtn.disabled = !callHasExpandedMedia();
     els.endCallBtn.disabled = false;
     state.call.mediaCollapsed = false;
@@ -2172,6 +2458,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (state.call.callId) {
       els.shareScreenBtn.disabled = false;
     }
+    els.toggleCallViewBtn.disabled = !callHasExpandedMedia();
     els.fullscreenCallBtn.disabled = !callHasExpandedMedia();
     syncCallDockLayout();
   }
@@ -2962,6 +3249,23 @@ document.addEventListener("DOMContentLoaded", () => {
 
       await removeGroupFromState(groupId, "You left the group.");
     });
+    socket.on("direct_invites_updated", async (payload) => {
+      try {
+        const invite = payload && payload.invite;
+        const action = payload && payload.action;
+        const isReceiver = invite && Number(invite.receiverId) === currentUser.id;
+
+        if (action === "sent" && isReceiver) {
+          showAnnouncement("You received a new chat invite.");
+        } else if (action === "accepted" && invite) {
+          showAnnouncement("A direct invite was accepted. You can chat and call now.");
+        }
+
+        await refreshChatLists();
+      } catch (error) {
+        setStatus(error.message || "Failed to refresh invites.", true);
+      }
+    });
 
     socket.on("incoming-call", handleIncomingCall);
     socket.on("call-answered", handleCallAnswer);
@@ -2997,7 +3301,14 @@ document.addEventListener("DOMContentLoaded", () => {
       applyTheme(next);
     });
     els.refreshUsersBtn.addEventListener("click", () => refreshChatLists());
+    els.inviteBtn.addEventListener("click", async () => {
+      await openInviteModal();
+    });
     els.newGroupBtn.addEventListener("click", () => openGroupEditor("create"));
+    els.inviteSearchInput.addEventListener("input", () => {
+      state.inviteSearchTerm = String(els.inviteSearchInput.value || "").trim();
+      renderInviteDirectory();
+    });
     els.navLogoutBtn.addEventListener("click", () => {
       stopTyping();
       if (state.call.callId) {
@@ -3096,15 +3407,29 @@ document.addEventListener("DOMContentLoaded", () => {
     els.saveGroupBtn.addEventListener("click", async () => {
       await saveGroupEditor();
     });
+    els.closeInviteModalBtn.addEventListener("click", closeInviteModal);
+    els.cancelInviteBtn.addEventListener("click", closeInviteModal);
     els.groupNameInput.addEventListener("keydown", async (e) => {
       if (e.key === "Enter") {
         e.preventDefault();
         await saveGroupEditor();
       }
     });
+    els.inviteSearchInput.addEventListener("keydown", async (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        state.inviteSearchTerm = String(els.inviteSearchInput.value || "").trim();
+        renderInviteDirectory();
+      }
+    });
     els.groupModal.addEventListener("click", (e) => {
       if (e.target === els.groupModal) {
         closeGroupEditor();
+      }
+    });
+    els.inviteModal.addEventListener("click", (e) => {
+      if (e.target === els.inviteModal) {
+        closeInviteModal();
       }
     });
     els.closeGroupCallModalBtn.addEventListener("click", closeGroupCallModal);
@@ -3138,6 +3463,7 @@ document.addEventListener("DOMContentLoaded", () => {
         toggleChatMenu(false);
         els.emojiPanel.classList.add("hidden");
         closeGroupEditor();
+        closeInviteModal();
         closeGroupCallModal();
         if (state.call.pendingIncoming) {
           rejectIncomingCall();
@@ -3167,7 +3493,7 @@ document.addEventListener("DOMContentLoaded", () => {
     buildEmojiPanel();
     setHeader();
     showAnnouncement(
-      "Screen sharing and group chat are live. Use New Group to start a room or Share Screen during a call."
+      "Private invites, group chat, and screen sharing are ready. Accept an invite before starting a new DM."
     );
     resetCallUi();
     toggleChatMenu(false);

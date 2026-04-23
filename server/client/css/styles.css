@@ -331,6 +331,14 @@ label {
   gap: 12px;
 }
 
+.conversation-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .conversation-pane-head p {
   margin: 2px 0 0;
   color: var(--muted);
@@ -354,6 +362,39 @@ label {
   font-weight: 800;
   background: linear-gradient(140deg, #163f8d, #2f74ea);
   box-shadow: 0 12px 24px rgba(33, 98, 214, 0.22);
+}
+
+.invite-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 999px;
+  color: var(--text);
+  font-size: 0.82rem;
+  font-weight: 800;
+  background: color-mix(in srgb, var(--surface) 88%, #fff);
+  border: 1px solid color-mix(in srgb, var(--border) 88%, var(--primary));
+  box-shadow: 0 10px 20px rgba(10, 21, 46, 0.08);
+}
+
+.invite-btn svg {
+  width: 17px;
+  height: 17px;
+}
+
+.invite-btn-badge {
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 999px;
+  display: inline-grid;
+  place-items: center;
+  background: linear-gradient(140deg, #ff7b62, #ff4f58);
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 800;
 }
 
 .new-group-btn-icon {
@@ -832,6 +873,45 @@ label {
   font-style: italic;
 }
 
+.message-call {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 0;
+}
+
+.message-call-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 12px;
+  display: inline-grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--surface-muted) 78%, transparent);
+  color: var(--primary-strong);
+}
+
+.message-call-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.message-call-copy {
+  display: grid;
+  gap: 2px;
+}
+
+.message-call-title {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+.message-call-subtitle {
+  margin: 0;
+  font-size: 0.76rem;
+  color: var(--muted);
+}
+
 .message-meta {
   display: flex;
   align-items: center;
@@ -1071,8 +1151,8 @@ label {
 
 .call-control-btn {
   position: relative;
-  width: 74px;
-  height: 74px;
+  width: 56px;
+  height: 56px;
   border-radius: 50%;
   border: 1px solid rgba(255, 255, 255, 0.06);
   display: inline-grid;
@@ -1084,8 +1164,8 @@ label {
 }
 
 .call-control-btn svg {
-  width: 29px;
-  height: 29px;
+  width: 20px;
+  height: 20px;
   display: block;
 }
 
@@ -1388,6 +1468,45 @@ label {
   accent-color: var(--primary);
 }
 
+.invite-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.invite-option .group-member-option-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.invite-option-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.invite-pill {
+  padding: 7px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface-muted) 82%, transparent);
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.invite-pill.connected {
+  background: color-mix(in srgb, #d7f8e3 88%, #fff);
+  color: #0b7440;
+}
+
+.invite-pill.pending {
+  background: color-mix(in srgb, #ffe5c3 88%, #fff);
+  color: #8d5200;
+}
+
 .group-member-option-action {
   display: inline-flex;
   align-items: center;
@@ -1545,8 +1664,13 @@ label {
   }
 
   .call-control-btn {
-    width: 68px;
-    height: 68px;
+    width: 52px;
+    height: 52px;
+  }
+
+  .call-control-btn svg {
+    width: 19px;
+    height: 19px;
   }
 }
 
@@ -1574,11 +1698,16 @@ label {
     flex-direction: column;
   }
 
+  .conversation-head-actions {
+    justify-content: stretch;
+  }
+
   .header-action-btn {
     width: 100%;
   }
 
-  .new-group-btn {
+  .new-group-btn,
+  .invite-btn {
     justify-content: center;
   }
 

@@ -23,6 +23,20 @@ CREATE TABLE IF NOT EXISTS messages (
   INDEX idx_messages_receiver_sender_created (receiver_id, sender_id, created_at)
 );
 
+CREATE TABLE IF NOT EXISTS direct_invites (
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  pair_key VARCHAR(64) NOT NULL UNIQUE,
+  sender_id INT NOT NULL,
+  receiver_id INT NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'pending',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  responded_at TIMESTAMP NULL DEFAULT NULL,
+  CONSTRAINT fk_direct_invites_sender FOREIGN KEY (sender_id) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_direct_invites_receiver FOREIGN KEY (receiver_id) REFERENCES users(id) ON DELETE CASCADE,
+  INDEX idx_direct_invites_receiver_status (receiver_id, status, created_at),
+  INDEX idx_direct_invites_sender_status (sender_id, status, created_at)
+);
+
 DROP TABLE IF EXISTS group_messages;
 DROP TABLE IF EXISTS group_members;
 DROP TABLE IF EXISTS `groups`;

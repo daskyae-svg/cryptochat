@@ -62,10 +62,20 @@
                 <h1>Chats</h1>
                 <p id="currentUserLabel"></p>
               </div>
-              <button id="newGroupBtn" type="button" class="header-action-btn new-group-btn">
-                <span class="new-group-btn-icon">+</span>
-                <span>New Group</span>
-              </button>
+              <div class="conversation-head-actions">
+                <button id="inviteBtn" type="button" class="header-action-btn invite-btn">
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M12 4.5l6 2.4v4.2c0 3.7-2.2 7-6 8.4c-3.8-1.4-6-4.7-6-8.4V6.9z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+                    <path d="M9.5 11.9l1.7 1.7l3.5-3.9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                  </svg>
+                  <span id="inviteBtnLabel">Invites</span>
+                  <span id="inviteBtnBadge" class="invite-btn-badge hidden">0</span>
+                </button>
+                <button id="newGroupBtn" type="button" class="header-action-btn new-group-btn">
+                  <span class="new-group-btn-icon">+</span>
+                  <span>New Group</span>
+                </button>
+              </div>
             </div>
           </header>
 
@@ -147,10 +157,17 @@
                 </div>
               </div>
               <div class="call-dock-actions">
-                <button id="toggleCallViewBtn" type="button" class="secondary-btn hidden" aria-hidden="true" tabindex="-1">Hide Video</button>
+                <button id="toggleCallViewBtn" type="button" class="call-control-btn" title="Hide Preview" aria-label="Hide Preview">
+                  <svg viewBox="0 0 24 24" data-call-icon="1" aria-hidden="true">
+                    <path d="M4 7.5A2.5 2.5 0 0 1 6.5 5h11A2.5 2.5 0 0 1 20 7.5v7A2.5 2.5 0 0 1 17.5 17h-11A2.5 2.5 0 0 1 4 14.5z" fill="none" stroke="currentColor" stroke-width="1.7"/>
+                    <path d="M8 12h8" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                    <path d="M6 18L18 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                  </svg>
+                  <span class="sr-only" data-btn-label="1">Hide Preview</span>
+                </button>
                 <button id="fullscreenCallBtn" type="button" class="secondary-btn hidden" aria-hidden="true" tabindex="-1">Full Screen</button>
                 <button id="shareScreenBtn" type="button" class="call-control-btn" title="Share Screen" aria-label="Share Screen">
-                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" data-call-icon="1" aria-hidden="true">
                     <path d="M8 18h8" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
                     <path d="M12 6v8" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
                     <path d="M8.5 10.5L12 14l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
@@ -159,7 +176,7 @@
                   <span class="sr-only" data-btn-label="1">Share Screen</span>
                 </button>
                 <button id="muteCallBtn" type="button" class="call-control-btn" title="Mute" aria-label="Mute">
-                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" data-call-icon="1" aria-hidden="true">
                     <path d="M12 4.8a2.6 2.6 0 0 1 2.6 2.6v4.9a2.6 2.6 0 1 1-5.2 0V7.4A2.6 2.6 0 0 1 12 4.8z" fill="none" stroke="currentColor" stroke-width="1.9"/>
                     <path d="M7.7 11.9a4.3 4.3 0 1 0 8.6 0" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
                     <path d="M12 16.2v3.2" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>
@@ -321,6 +338,44 @@
         <div class="call-modal-actions">
           <button id="cancelGroupBtn" type="button" class="secondary-btn">Cancel</button>
           <button id="saveGroupBtn" type="button" class="danger-btn">Create Group</button>
+        </div>
+      </div>
+    </section>
+
+    <section id="inviteModal" class="call-modal hidden" role="dialog" aria-modal="true" aria-label="Direct invites">
+      <div class="call-modal-card group-modal-card">
+        <div class="group-modal-head">
+          <div>
+            <p class="call-modal-title">Private Invites</p>
+            <p class="call-modal-label">Accept an invite before direct chats and calls become available.</p>
+          </div>
+          <button id="closeInviteModalBtn" type="button" class="icon-btn settings-close-btn" aria-label="Close invite dialog">
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M18 6L6 18M6 6l12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+          </button>
+        </div>
+
+        <label class="search-wrap group-name-field" for="inviteSearchInput">
+          <span>Find people</span>
+          <input
+            id="inviteSearchInput"
+            type="text"
+            maxlength="50"
+            placeholder="Search users..."
+            autocomplete="off"
+          />
+        </label>
+
+        <div class="group-member-picker">
+          <p class="group-picker-hint">Invite someone new or respond to pending requests.</p>
+          <div id="inviteUserOptions" class="group-member-options" tabindex="-1"></div>
+        </div>
+
+        <p id="inviteModalStatus" class="status"></p>
+
+        <div class="call-modal-actions">
+          <button id="cancelInviteBtn" type="button" class="secondary-btn">Close</button>
         </div>
       </div>
     </section>

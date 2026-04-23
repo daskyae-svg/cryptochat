@@ -38,9 +38,21 @@
         body: { username, password },
       });
     },
-    fetchUsers(excludeUserId, search) {
-      const query = toQuery({ exclude: excludeUserId, search });
+    fetchUsers(excludeUserId, search, viewerId) {
+      const query = toQuery({ exclude: excludeUserId, search, viewerId });
       return request(`/users${query ? `?${query}` : ""}`);
+    },
+    sendDirectInvite(senderId, receiverId) {
+      return request("/direct-invites", {
+        method: "POST",
+        body: { senderId, receiverId },
+      });
+    },
+    respondDirectInvite(inviteId, userId, action) {
+      return request(`/direct-invites/${inviteId}/respond`, {
+        method: "POST",
+        body: { userId, action },
+      });
     },
     fetchConversations(userId, search) {
       const query = toQuery({ userId, search });
