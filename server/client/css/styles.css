@@ -330,6 +330,31 @@ label {
   padding-inline: 14px;
 }
 
+.new-group-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  padding: 10px 16px;
+  border-radius: 999px;
+  color: #fff;
+  font-size: 0.84rem;
+  font-weight: 800;
+  background: linear-gradient(140deg, #163f8d, #2f74ea);
+  box-shadow: 0 12px 24px rgba(33, 98, 214, 0.22);
+}
+
+.new-group-btn-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: inline-grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.18);
+  font-size: 1rem;
+  line-height: 1;
+}
+
 .search-wrap {
   display: grid;
   gap: 6px;
@@ -350,6 +375,7 @@ label {
   overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -513,6 +539,7 @@ label {
 .chat-main {
   min-width: 0;
   min-height: 0;
+  height: 100%;
   display: grid;
   grid-template-rows: auto 1fr auto auto auto;
   background: linear-gradient(
@@ -538,6 +565,20 @@ label {
   align-items: center;
   gap: 10px;
   min-width: 0;
+}
+
+.mobile-back-btn {
+  display: none;
+  min-width: 42px;
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  border-radius: 12px;
+}
+
+.mobile-back-btn span {
+  font-size: 1.2rem;
+  line-height: 1;
 }
 
 .chat-user-meta h2 {
@@ -709,6 +750,7 @@ label {
   overflow-y: auto;
   overflow-x: hidden;
   overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
   padding: 14px 16px;
   display: flex;
   flex-direction: column;
@@ -889,6 +931,18 @@ label {
   gap: 10px;
 }
 
+.call-dock.call-dock-sharing .call-dock-media {
+  grid-template-columns: minmax(0, 1.95fr) minmax(180px, 0.8fr);
+}
+
+.call-dock.call-dock-sharing .local-panel {
+  order: -1;
+}
+
+.call-dock.call-dock-sharing .local-panel video {
+  object-fit: contain;
+}
+
 .call-video-panel {
   position: relative;
   min-height: 170px;
@@ -984,6 +1038,10 @@ label {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+.call-dock-actions button {
+  white-space: nowrap;
 }
 
 .emoji-panel {
@@ -1358,6 +1416,72 @@ label {
   .local-panel {
     min-height: 140px;
   }
+
+  body.mobile-list-view .messenger-shell {
+    grid-template-columns: 1fr;
+    grid-template-rows: 68px 1fr;
+  }
+
+  body.mobile-list-view .chat-main {
+    display: none;
+  }
+
+  body.mobile-chat-open .window-chrome {
+    display: none;
+  }
+
+  body.mobile-chat-open .app-window {
+    height: 100dvh;
+    max-height: 100dvh;
+    grid-template-rows: 1fr;
+  }
+
+  body.mobile-chat-open .messenger-shell {
+    height: 100%;
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr;
+  }
+
+  body.mobile-chat-open .app-rail,
+  body.mobile-chat-open .conversation-pane {
+    display: none;
+  }
+
+  body.mobile-chat-open .chat-main {
+    display: grid;
+    min-height: 0;
+    height: 100%;
+  }
+
+  .mobile-back-btn {
+    display: grid;
+  }
+
+  .chat-header {
+    padding: 10px 12px;
+  }
+
+  .messages {
+    padding: 12px;
+  }
+
+  .composer {
+    padding: 10px;
+  }
+
+  .call-dock {
+    padding: 10px;
+  }
+
+  .call-dock-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .call-dock-actions .secondary-btn,
+  .call-dock-actions .danger-btn {
+    width: 100%;
+  }
 }
 
 @media (max-width: 540px) {
@@ -1388,8 +1512,20 @@ label {
     width: 100%;
   }
 
+  .new-group-btn {
+    justify-content: center;
+  }
+
   .call-dock-meta {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .chat-header-actions {
+    gap: 6px;
+  }
+
+  .call-dock-actions {
+    grid-template-columns: 1fr 1fr;
   }
 }

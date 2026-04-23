@@ -26,6 +26,7 @@ document.addEventListener("DOMContentLoaded", () => {
     currentUserLabel: $("currentUserLabel"),
     currentUserRailAvatar: $("currentUserRailAvatar"),
     activeChatLabel: $("activeChatLabel"),
+    mobileBackBtn: $("mobileBackBtn"),
     activeUserAvatar: $("activeUserAvatar"),
     activeUserPresence: $("activeUserPresence"),
     typingIndicator: $("typingIndicator"),
@@ -133,6 +134,7 @@ document.addEventListener("DOMContentLoaded", () => {
       groupId: null,
       selectedUserIds: new Set(),
     },
+    mobileChatOpen: false,
     call: {
       status: CALL.IDLE,
       callId: null,
@@ -157,6 +159,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const BOTTOM_GAP = 110;
   const MAX_IMG = 2 * 1024 * 1024;
   const GIF_DEFAULT = "funny";
+  const MOBILE_CHAT_BREAKPOINT = 760;
   let announcementHideTimer = null;
   let announcementDismissTimer = null;
   let rtcConfig = {
@@ -274,6 +277,43 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function getSelectedChat() {
     return isGroupChatSelected() ? getSelectedGroup() : getSelectedConversation();
+  }
+
+  function isMobileViewport() {
+    return window.innerWidth <= MOBILE_CHAT_BREAKPOINT;
+  }
+
+  function syncMobileLayout() {
+    const hasActiveChat = hasSelectedChat();
+    const mobileChatOpen = isMobileViewport() && hasActiveChat && state.mobileChatOpen;
+    const mobileListView = isMobileViewport() && !mobileChatOpen;
+
+    document.body.classList.toggle("mobile-chat-open", mobileChatOpen);
+    document.body.classList.toggle("mobile-list-view", mobileListView);
+
+    if (els.mobileBackBtn) {
+      els.mobileBackBtn.classList.toggle("hidden", !mobileChatOpen);
+    }
+  }
+
+  function openMobileChatView() {
+    if (!isMobileViewport()) {
+      return;
+    }
+
+    state.mobileChatOpen = true;
+    syncMobileLayout();
+  }
+
+  function showMobileConversationList() {
+    state.mobileChatOpen = false;
+    toggleChatMenu(false);
+    setSettings(false);
+    syncMobileLayout();
+
+    if (isMobileViewport()) {
+      els.userSearchInput.focus();
+    }
   }
 
   function getUserProfile(userId) {
@@ -422,6 +462,14 @@ document.addEventListener("DOMContentLoaded", () => {
         openGroupEditor("add", selectedGroup.id);
       });
 
+      const leaveGroupBtn = document.createElement("button");
+      leaveGroupBtn.type = "button";
+      leaveGroupBtn.className = "danger-btn";
+      leaveGroupBtn.textContent = "Leave Group";
+      leaveGroupBtn.addEventListener("click", async () => {
+        await leaveSelectedGroup();
+      });
+
       const heading = document.createElement("p");
       heading.className = "chat-menu-heading";
       heading.textContent = "Members";
@@ -453,7 +501,14 @@ document.addEventListener("DOMContentLoaded", () => {
         membersWrap.appendChild(row);
       });
 
-      els.chatMenuExtra.append(changePhotoBtn, removePhotoBtn, addMemberBtn, heading, membersWrap);
+      els.chatMenuExtra.append(
+        changePhotoBtn,
+        removePhotoBtn,
+        addMemberBtn,
+        leaveGroupBtn,
+        heading,
+        membersWrap
+      );
       return;
     }
 
@@ -592,6 +647,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const onlineMembers = (selectedGroup.members || []).filter((member) => member.online).length;
       els.activeUserPresence.textContent = `${selectedGroup.members.length} members • ${onlineMembers} online`;
+      els.activeUserPresence.textContent = `${selectedGroup.members.length} members | ${onlineMembers} online`;
       els.activeUserPresence.style.color = "var(--muted)";
       return;
     }
@@ -737,6 +793,7 @@ document.addEventListener("DOMContentLoaded", () => {
       updatePresenceLabel();
       updateCallButtonState();
       renderChatMenu();
+      syncMobileLayout();
       return;
     }
 
@@ -759,6 +816,7 @@ document.addEventListener("DOMContentLoaded", () => {
     updatePresenceLabel();
     updateCallButtonState();
     renderChatMenu();
+    syncMobileLayout();
   }
 
   function sortConversations() {
@@ -956,6 +1014,7 @@ document.addEventListener("DOMContentLoaded", () => {
       setHeader();
       renderConversations();
       await loadMessages();
+      syncMobileLayout();
       return;
     }
 
@@ -966,16 +1025,17 @@ document.addEventListener("DOMContentLoaded", () => {
       setHeader();
       renderConversations();
       await loadMessages();
+      syncMobileLayout();
       return;
     }
 
     if (state.conversations.length) {
-      await selectConversation(state.conversations[0].userId);
+      await selectConversation(state.conversations[0].userId, { openMobileView: false });
       return;
     }
 
     if (state.groups.length) {
-      await selectGroup(state.groups[0].id);
+      await selectGroup(state.groups[0].id, { openMobileView: false });
       return;
     }
 
@@ -986,9 +1046,11 @@ document.addEventListener("DOMContentLoaded", () => {
     state.selectedAvatarUrl = null;
     state.messageNodes.clear();
     els.messagesContainer.innerHTML = "";
+    state.mobileChatOpen = false;
     setHeader();
     renderConversations();
     setStatus("No chats available yet.", false);
+    syncMobileLayout();
   }
 
   async function refreshChatLists() {
@@ -1020,7 +1082,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  async function selectConversation(userId) {
+  async function selectConversation(userId, options = {}) {
     const c = state.conversations.find((it) => it.userId === userId);
     if (!c) return;
     if (!isDirectChatSelected() || state.selectedUserId !== userId) stopTyping();
@@ -1033,13 +1095,20 @@ document.addEventListener("DOMContentLoaded", () => {
     state.selectedAvatarUrl = c.avatarUrl;
     state.unread.delete(userId);
     state.typingUsers.delete(userId);
+    if (options.openMobileView !== false) {
+      openMobileChatView();
+    } else {
+      syncMobileLayout();
+    }
     setHeader();
     renderConversations();
     await loadMessages();
-    els.messageInput.focus();
+    if (!isMobileViewport()) {
+      els.messageInput.focus();
+    }
   }
 
-  async function selectGroup(groupId) {
+  async function selectGroup(groupId, options = {}) {
     const group = state.groups.find((item) => item.id === groupId);
     if (!group) return;
     if (!isGroupChatSelected() || state.selectedGroupId !== groupId) stopTyping();
@@ -1052,10 +1121,17 @@ document.addEventListener("DOMContentLoaded", () => {
     state.selectedAvatarUrl = group.avatarUrl;
     state.unreadGroups.delete(groupId);
     clearGroupTyping(groupId);
+    if (options.openMobileView !== false) {
+      openMobileChatView();
+    } else {
+      syncMobileLayout();
+    }
     setHeader();
     renderConversations();
     await loadMessages();
-    els.messageInput.focus();
+    if (!isMobileViewport()) {
+      els.messageInput.focus();
+    }
   }
 
   function updateConvFromMessage(m) {
@@ -1409,6 +1485,75 @@ document.addEventListener("DOMContentLoaded", () => {
       setStatus(e.message, true);
     } finally {
       els.groupAvatarInput.value = "";
+    }
+  }
+
+  async function removeGroupFromState(groupId, statusMessage) {
+    const normalizedGroupId = Number(groupId);
+    if (!normalizedGroupId) {
+      return;
+    }
+
+    const groupExists = state.groups.some((group) => group.id === normalizedGroupId);
+    const wasSelected = isGroupChatSelected() && Number(state.selectedGroupId) === normalizedGroupId;
+
+    if (!groupExists && !wasSelected) {
+      return;
+    }
+
+    state.groups = state.groups.filter((group) => group.id !== normalizedGroupId);
+    state.unreadGroups.delete(normalizedGroupId);
+    clearGroupTyping(normalizedGroupId);
+
+    if (wasSelected) {
+      state.selectedChatKind = null;
+      state.selectedGroupId = null;
+      state.selectedUserId = null;
+      state.selectedUsername = "";
+      state.selectedAvatarUrl = null;
+      state.messageNodes.clear();
+      els.messagesContainer.innerHTML = "";
+      state.mobileChatOpen = false;
+      closeGroupCallModal();
+      await ensureActiveSelection();
+    } else {
+      renderConversations();
+      setHeader();
+    }
+
+    syncMobileLayout();
+
+    if (statusMessage) {
+      setStatus(statusMessage, false);
+    }
+  }
+
+  async function leaveSelectedGroup() {
+    const selectedGroup = getSelectedGroup();
+    if (!selectedGroup) {
+      setStatus("Choose a group first.", true);
+      return;
+    }
+
+    const confirmed = window.confirm(`Leave "${selectedGroup.name}"?`);
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      if (socket.connected) {
+        await emitAck("leave_group", {
+          groupId: selectedGroup.id,
+          userId: currentUser.id,
+        });
+      } else {
+        await window.Api.leaveGroup(selectedGroup.id, currentUser.id);
+      }
+
+      await removeGroupFromState(selectedGroup.id, "You left the group.");
+      toggleChatMenu(false);
+    } catch (e) {
+      setStatus(e.message, true);
     }
   }
 
@@ -1834,10 +1979,16 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function syncLocalVideoPreview() {
     const previewStream = state.call.screenSharing ? state.call.screenStream : state.call.localStream;
-    els.localVideoLabel.textContent = state.call.screenSharing ? "You - Sharing screen" : "Screen Share";
+    const hasCameraPreview =
+      Boolean(state.call.localStream) &&
+      state.call.localStream.getVideoTracks().some((track) => track.readyState === "live");
+
+    els.localVideoLabel.textContent = state.call.screenSharing ? "Screen Share" : "You";
     els.localVideoFallback.textContent = state.call.screenSharing
-      ? "Screen preview"
-      : "Click Share Screen when you want to present.";
+      ? "Your screen preview"
+      : hasCameraPreview
+        ? "Camera preview"
+        : "Camera preview is unavailable.";
     updateVideoElement(els.localVideo, els.localVideoFallback, previewStream, true);
   }
 
@@ -1876,6 +2027,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     els.callDock.classList.toggle("call-dock-collapsed", Boolean(state.call.mediaCollapsed));
+    els.callDock.classList.toggle("call-dock-sharing", Boolean(state.call.screenSharing));
 
     if (els.toggleCallViewBtn) {
       els.toggleCallViewBtn.textContent = state.call.mediaCollapsed ? "Show Video" : "Hide Video";
@@ -2046,7 +2198,16 @@ document.addEventListener("DOMContentLoaded", () => {
       return state.call.localStream;
     }
 
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+    } catch (cameraError) {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      setStatus(
+        "Camera access was unavailable, so the call will continue with audio until you share a screen.",
+        true
+      );
+    }
 
     stream.getAudioTracks().forEach((track) => {
       track.enabled = !state.call.muted;
@@ -2186,6 +2347,10 @@ document.addEventListener("DOMContentLoaded", () => {
       track.enabled = !state.call.muted;
       pc.addTrack(track, stream);
     });
+    const [cameraTrack] = stream.getVideoTracks();
+    if (state.call.videoSender) {
+      await state.call.videoSender.replaceTrack(cameraTrack || null);
+    }
     syncLocalVideoPreview();
   }
 
@@ -2194,7 +2359,8 @@ document.addEventListener("DOMContentLoaded", () => {
       throw new Error("Screen sharing is not ready yet.");
     }
 
-    await state.call.videoSender.replaceTrack(null);
+    const [cameraTrack] = state.call.localStream ? state.call.localStream.getVideoTracks() : [];
+    await state.call.videoSender.replaceTrack(cameraTrack || null);
 
     if (state.call.screenStream) {
       state.call.screenStream.getTracks().forEach((track) => {
@@ -2234,9 +2400,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
       screenTrack.onended = () => {
         if (state.call.screenSharing) {
-          stopScreenShare().catch((error) => {
-            setStatus(error.message || "Screen sharing stopped.", false);
-          });
+          stopScreenShare()
+            .then(() => {
+              setStatus("Screen sharing stopped.", false);
+            })
+            .catch((error) => {
+              setStatus(error.message || "Screen sharing stopped.", false);
+            });
         }
       };
 
@@ -2765,6 +2935,15 @@ document.addEventListener("DOMContentLoaded", () => {
         setHeader();
       }
     });
+    socket.on("group_left", async (payload) => {
+      const groupId = Number(payload && payload.groupId);
+      const userId = Number(payload && payload.userId);
+      if (!groupId || userId !== currentUser.id) {
+        return;
+      }
+
+      await removeGroupFromState(groupId, "You left the group.");
+    });
 
     socket.on("incoming-call", handleIncomingCall);
     socket.on("call-answered", handleCallAnswer);
@@ -2782,11 +2961,18 @@ document.addEventListener("DOMContentLoaded", () => {
   function bindUi() {
     els.navChatsBtn.addEventListener("click", () => {
       setSettings(false);
-      els.messageInput.focus();
+      if (isMobileViewport()) {
+        showMobileConversationList();
+      } else {
+        els.messageInput.focus();
+      }
     });
     els.navProfileBtn.addEventListener("click", () => setSettings(true));
     els.navSettingsBtn.addEventListener("click", () => setSettings(true));
     els.closeSettingsBtn.addEventListener("click", () => setSettings(false));
+    els.mobileBackBtn.addEventListener("click", () => {
+      showMobileConversationList();
+    });
     els.themeToggleBtn.addEventListener("click", () => {
       const next = document.body.classList.contains("theme-dark") ? "light" : "dark";
       localStorage.setItem(THEME_KEY, next);
@@ -2944,6 +3130,9 @@ document.addEventListener("DOMContentLoaded", () => {
     document.addEventListener("fullscreenchange", () => {
       syncFullscreenButton();
     });
+    window.addEventListener("resize", () => {
+      syncMobileLayout();
+    });
 
     window.addEventListener("beforeunload", () => {
       clearAnnouncementTimers();
@@ -2964,10 +3153,12 @@ document.addEventListener("DOMContentLoaded", () => {
     );
     resetCallUi();
     toggleChatMenu(false);
+    syncMobileLayout();
     await loadWebRtcConfig();
     bindSocket();
     bindUi();
     await refreshChatLists();
+    syncMobileLayout();
   }
 
   init();

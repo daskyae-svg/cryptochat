@@ -23,14 +23,18 @@ CREATE TABLE IF NOT EXISTS messages (
   INDEX idx_messages_receiver_sender_created (receiver_id, sender_id, created_at)
 );
 
-CREATE TABLE IF NOT EXISTS `groups` (
+DROP TABLE IF EXISTS group_messages;
+DROP TABLE IF EXISTS group_members;
+DROP TABLE IF EXISTS `groups`;
+
+CREATE TABLE `groups` (
   id INT PRIMARY KEY AUTO_INCREMENT,
   name VARCHAR(255) NOT NULL,
   avatar_url LONGTEXT NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS group_members (
+CREATE TABLE group_members (
   id INT PRIMARY KEY AUTO_INCREMENT,
   group_id INT NOT NULL,
   user_id INT NOT NULL,
@@ -40,7 +44,7 @@ CREATE TABLE IF NOT EXISTS group_members (
   INDEX idx_group_members_user_group (user_id, group_id)
 );
 
-CREATE TABLE IF NOT EXISTS group_messages (
+CREATE TABLE group_messages (
   id INT PRIMARY KEY AUTO_INCREMENT,
   group_id INT NOT NULL,
   sender_id INT NOT NULL,

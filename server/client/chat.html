@@ -62,7 +62,10 @@
                 <h1>Chats</h1>
                 <p id="currentUserLabel"></p>
               </div>
-              <button id="newGroupBtn" type="button" class="secondary-btn header-action-btn">New Group</button>
+              <button id="newGroupBtn" type="button" class="header-action-btn new-group-btn">
+                <span class="new-group-btn-icon">+</span>
+                <span>New Group</span>
+              </button>
             </div>
           </header>
 
@@ -82,6 +85,9 @@
         <section class="chat-main">
           <header class="chat-header">
             <div class="chat-user-meta">
+              <button id="mobileBackBtn" type="button" class="icon-btn mobile-back-btn hidden" aria-label="Back to chats">
+                <span aria-hidden="true">←</span>
+              </button>
               <div id="activeUserAvatar" class="avatar avatar-lg">?</div>
               <div>
                 <h2 id="activeChatLabel">Select a conversation</h2>

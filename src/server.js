@@ -649,6 +649,23 @@ async function joinUserSocketsToGroup(userId, groupId) {
   );
 }
 
+async function leaveUserSocketsFromGroup(userId, groupId) {
+  const sockets = onlineUsers.get(String(userId));
+  if (!sockets || !sockets.size) {
+    return;
+  }
+
+  const roomName = getGroupRoomName(groupId);
+  await Promise.all(
+    Array.from(sockets).map(async (socketId) => {
+      const activeSocket = io.sockets.sockets.get(socketId);
+      if (activeSocket) {
+        await activeSocket.leave(roomName);
+      }
+    })
+  );
+}
+
 async function getGroupMembers(groupId) {
   const db = getDb();
   const [rows] = await db.execute(
@@ -984,6 +1001,98 @@ async function emitGroupUpdate(groupId) {
 
   io.to(getGroupRoomName(groupId)).emit("group_updated", payload);
   return payload;
+}
+
+async function leaveGroupMembership(groupId, userId) {
+  const db = getDb();
+  const connection = await db.getConnection();
+
+  try {
+    await connection.beginTransaction();
+
+    const [groupRows] = await connection.execute(
+      `
+      SELECT id
+      FROM \`groups\`
+      WHERE id = ?
+      LIMIT 1
+      `,
+      [groupId]
+    );
+
+    if (!groupRows.length) {
+      throw createHttpError(404, "Group not found.");
+    }
+
+    const [memberRows] = await connection.execute(
+      `
+      SELECT user_id
+      FROM group_members
+      WHERE group_id = ? AND user_id = ?
+      LIMIT 1
+      `,
+      [groupId, userId]
+    );
+
+    if (!memberRows.length) {
+      throw createHttpError(403, "You are not a member of this group.");
+    }
+
+    await connection.execute(
+      `
+      DELETE FROM group_members
+      WHERE group_id = ? AND user_id = ?
+      `,
+      [groupId, userId]
+    );
+
+    const [remainingRows] = await connection.execute(
+      `
+      SELECT user_id
+      FROM group_members
+      WHERE group_id = ?
+      `,
+      [groupId]
+    );
+
+    const remainingUserIds = remainingRows.map((row) => Number(row.user_id)).filter(Boolean);
+    const groupDeleted = remainingUserIds.length === 0;
+
+    if (groupDeleted) {
+      await connection.execute(
+        `
+        DELETE FROM \`groups\`
+        WHERE id = ?
+        `,
+        [groupId]
+      );
+    }
+
+    await connection.commit();
+
+    await leaveUserSocketsFromGroup(userId, groupId);
+    emitToUser(userId, "group_left", {
+      groupId,
+      userId,
+      groupDeleted,
+    });
+
+    if (!groupDeleted) {
+      await emitGroupUpdate(groupId);
+    }
+
+    return {
+      groupId,
+      userId,
+      groupDeleted,
+      remainingUserIds,
+    };
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
 }
 
 function emitPresenceUpdate(userId, online) {
@@ -1537,6 +1646,32 @@ app.post("/groups/:id/add-user", async (req, res) => {
       console.error("[groups:add-user] failed:", error);
     }
     return res.status(status).json({ error: error.message || "Failed to add user to group." });
+  }
+});
+
+app.post("/groups/:id/leave", async (req, res) => {
+  try {
+    const groupId = toPositiveInt(req.params.id);
+    const userId = toPositiveInt(req.body.userId ?? req.body.requesterId);
+
+    if (!groupId || !userId) {
+      return res.status(400).json({
+        error: "Valid group id and userId are required.",
+      });
+    }
+
+    const result = await leaveGroupMembership(groupId, userId);
+    return res.json({
+      message: "You left the group.",
+      groupId: result.groupId,
+      groupDeleted: result.groupDeleted,
+    });
+  } catch (error) {
+    const status = error.status || 500;
+    if (status >= 500) {
+      console.error("[groups:leave] failed:", error);
+    }
+    return res.status(status).json({ error: error.message || "Failed to leave group." });
   }
 });
 
@@ -2109,6 +2244,43 @@ io.on("connection", (socket) => {
       const errorMessage = error.message || "Failed to send group message.";
       if ((error.status || 500) >= 500) {
         console.error("[socket send_group_message] failed:", error);
+      }
+
+      if (typeof callback === "function") {
+        callback({ ok: false, error: errorMessage });
+      }
+    }
+  });
+
+  socket.on("leave_group", async (payload, callback) => {
+    try {
+      const groupId = toPositiveInt(payload && payload.groupId);
+      const userId = toPositiveInt(payload && (payload.userId ?? payload.requesterId));
+      const registeredUserId = toPositiveInt(socket.data.userId);
+
+      if (!groupId || !userId) {
+        throw createHttpError(400, "groupId and userId are required.");
+      }
+      if (registeredUserId && userId !== registeredUserId) {
+        throw createHttpError(403, "Invalid user identity.");
+      }
+
+      const result = await leaveGroupMembership(groupId, userId);
+
+      if (typeof callback === "function") {
+        callback({
+          ok: true,
+          message: {
+            groupId: result.groupId,
+            userId: result.userId,
+            groupDeleted: result.groupDeleted,
+          },
+        });
+      }
+    } catch (error) {
+      const errorMessage = error.message || "Failed to leave group.";
+      if ((error.status || 500) >= 500) {
+        console.error("[socket leave_group] failed:", error);
       }
 
       if (typeof callback === "function") {

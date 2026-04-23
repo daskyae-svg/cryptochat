@@ -62,6 +62,12 @@
         body: { requesterId, newUserId },
       });
     },
+    leaveGroup(groupId, userId) {
+      return request(`/groups/${groupId}/leave`, {
+        method: "POST",
+        body: { userId },
+      });
+    },
     updateGroupAvatar(groupId, requesterId, avatarUrl) {
       return request(`/groups/${groupId}/avatar`, {
         method: "POST",
