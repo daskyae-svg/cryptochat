@@ -350,38 +350,59 @@ label {
   padding-inline: 14px;
 }
 
-.new-group-btn {
+.quick-action-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 9px;
-  padding: 10px 16px;
-  border-radius: 999px;
-  color: #fff;
-  font-size: 0.84rem;
+  gap: 10px;
+  min-height: 48px;
+  padding: 10px 14px;
+  border-radius: 16px;
+  font-size: 0.82rem;
   font-weight: 800;
+  position: relative;
+}
+
+.quick-action-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 10px;
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.quick-action-icon svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+
+.quick-action-label {
+  white-space: nowrap;
+  letter-spacing: 0.01em;
+}
+
+.new-group-btn {
+  color: #fff;
   background: linear-gradient(140deg, #163f8d, #2f74ea);
   box-shadow: 0 12px 24px rgba(33, 98, 214, 0.22);
 }
 
 .invite-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 10px 14px;
-  border-radius: 999px;
   color: var(--text);
-  font-size: 0.82rem;
-  font-weight: 800;
   background: color-mix(in srgb, var(--surface) 88%, #fff);
   border: 1px solid color-mix(in srgb, var(--border) 88%, var(--primary));
   box-shadow: 0 10px 20px rgba(10, 21, 46, 0.08);
 }
 
-.invite-btn svg {
-  width: 17px;
-  height: 17px;
+.new-group-btn .quick-action-icon {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.invite-btn .quick-action-icon {
+  background: color-mix(in srgb, #dbe8ff 88%, #fff);
+  color: #1b56b5;
 }
 
 .invite-btn-badge {
@@ -395,17 +416,6 @@ label {
   color: #fff;
   font-size: 0.72rem;
   font-weight: 800;
-}
-
-.new-group-btn-icon {
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  display: inline-grid;
-  place-items: center;
-  background: rgba(255, 255, 255, 0.18);
-  font-size: 1rem;
-  line-height: 1;
 }
 
 .search-wrap {
@@ -1699,11 +1709,14 @@ label {
   }
 
   .conversation-head-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     justify-content: stretch;
   }
 
   .header-action-btn {
     width: 100%;
+    min-width: 0;
   }
 
   .new-group-btn,

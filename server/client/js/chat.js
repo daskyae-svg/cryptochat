@@ -434,7 +434,14 @@ document.addEventListener("DOMContentLoaded", () => {
   function updateInviteButtonState() {
     const incomingCount = countIncomingInvites();
     if (els.inviteBtnLabel) {
-      els.inviteBtnLabel.textContent = incomingCount ? "Invites" : "Privacy";
+      els.inviteBtnLabel.textContent = "Add Friends";
+    }
+    if (els.inviteBtn) {
+      const label = incomingCount
+        ? `Add Friends (${incomingCount} pending request${incomingCount === 1 ? "" : "s"})`
+        : "Add Friends";
+      els.inviteBtn.setAttribute("title", label);
+      els.inviteBtn.setAttribute("aria-label", label);
     }
     if (els.inviteBtnBadge) {
       els.inviteBtnBadge.textContent = String(incomingCount);
@@ -529,12 +536,12 @@ document.addEventListener("DOMContentLoaded", () => {
       if (user.directRelationStatus === "accepted") {
         const pill = document.createElement("span");
         pill.className = "invite-pill connected";
-        pill.textContent = "Connected";
+        pill.textContent = "Friends";
         actions.appendChild(pill);
       } else if (user.directRelationStatus === "outgoing_pending") {
         const pill = document.createElement("span");
         pill.className = "invite-pill pending";
-        pill.textContent = "Pending";
+        pill.textContent = "Requested";
         actions.appendChild(pill);
       } else if (user.directRelationStatus === "incoming_pending" && user.directInviteId) {
         const acceptBtn = document.createElement("button");
@@ -548,7 +555,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const declineBtn = document.createElement("button");
         declineBtn.type = "button";
         declineBtn.className = "secondary-btn";
-        declineBtn.textContent = "Decline";
+        declineBtn.textContent = "Ignore";
         declineBtn.addEventListener("click", async () => {
           await respondDirectInvite(user.directInviteId, "reject");
         });
@@ -558,7 +565,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const inviteBtn = document.createElement("button");
         inviteBtn.type = "button";
         inviteBtn.className = "secondary-btn";
-        inviteBtn.textContent = "Invite";
+        inviteBtn.textContent = "Add";
         inviteBtn.addEventListener("click", async () => {
           await sendDirectInvite(user.id);
         });
@@ -583,7 +590,7 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       await loadInviteDirectory();
-      setInviteModalStatus("Invite sent.", false);
+      setInviteModalStatus("Friend request sent.", false);
     } catch (error) {
       setInviteModalStatus(error.message, true);
     }
@@ -603,7 +610,10 @@ document.addEventListener("DOMContentLoaded", () => {
       }
 
       await refreshChatLists();
-      setInviteModalStatus(action === "accept" ? "Invite accepted." : "Invite declined.", false);
+      setInviteModalStatus(
+        action === "accept" ? "Friend request accepted." : "Friend request ignored.",
+        false
+      );
     } catch (error) {
       setInviteModalStatus(error.message, true);
     }
@@ -3256,9 +3266,9 @@ document.addEventListener("DOMContentLoaded", () => {
         const isReceiver = invite && Number(invite.receiverId) === currentUser.id;
 
         if (action === "sent" && isReceiver) {
-          showAnnouncement("You received a new chat invite.");
+          showAnnouncement("You received a new friend request.");
         } else if (action === "accepted" && invite) {
-          showAnnouncement("A direct invite was accepted. You can chat and call now.");
+          showAnnouncement("Friend request accepted. You can chat and call now.");
         }
 
         await refreshChatLists();
@@ -3493,7 +3503,7 @@ document.addEventListener("DOMContentLoaded", () => {
     buildEmojiPanel();
     setHeader();
     showAnnouncement(
-      "Private invites, group chat, and screen sharing are ready. Accept an invite before starting a new DM."
+      "Add friends, create groups, and share your screen from calls. Accept a friend request before starting a new DM."
     );
     resetCallUi();
     toggleChatMenu(false);
