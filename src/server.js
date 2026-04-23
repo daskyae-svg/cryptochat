@@ -627,8 +627,8 @@ async function canUsersDirectlyInteract(userIdA, userIdB) {
   }
 
   const directInvite = await getDirectInviteByPair(userIdA, userIdB);
-  if (directInvite && directInvite.status === "accepted") {
-    return true;
+  if (directInvite) {
+    return directInvite.status === "accepted";
   }
 
   return usersHaveDirectHistory(userIdA, userIdB);
@@ -642,7 +642,7 @@ async function ensureDirectAccess(userIdA, userIdB) {
 
   const allowed = await canUsersDirectlyInteract(userIdA, userIdB);
   if (!allowed) {
-    throw createHttpError(403, "Direct messaging is locked until the invite is accepted.");
+    throw createHttpError(403, "Direct messaging is locked until the friend request is accepted.");
   }
 }
 
@@ -663,19 +663,15 @@ async function createDirectInvite(senderId, receiverId) {
     throw createHttpError(404, "One or both users were not found.");
   }
 
-  if (await usersHaveDirectHistory(senderId, receiverId)) {
-    throw createHttpError(409, "This direct conversation already exists.");
-  }
-
   const existingInvite = await getDirectInviteByPair(senderId, receiverId);
   const db = getDb();
 
   if (existingInvite) {
     if (existingInvite.status === "accepted") {
-      throw createHttpError(409, "This invite has already been accepted.");
+      throw createHttpError(409, "You are already friends.");
     }
     if (existingInvite.status === "pending") {
-      throw createHttpError(409, "There is already a pending invite between these users.");
+      throw createHttpError(409, "There is already a pending friend request between these users.");
     }
 
     await db.execute(
@@ -688,6 +684,10 @@ async function createDirectInvite(senderId, receiverId) {
     );
 
     return getDirectInviteById(existingInvite.id);
+  }
+
+  if (await usersHaveDirectHistory(senderId, receiverId)) {
+    throw createHttpError(409, "This direct conversation already exists.");
   }
 
   const [result] = await db.execute(
@@ -730,6 +730,51 @@ async function respondToDirectInvite(inviteId, userId, action) {
   );
 
   return getDirectInviteById(inviteId);
+}
+
+async function removeDirectFriendship(requesterId, otherUserId) {
+  if (!requesterId || !otherUserId || requesterId === otherUserId) {
+    throw createHttpError(400, "Valid requesterId and friendId are required.");
+  }
+
+  const usersExist = await ensureUsersExist(requesterId, otherUserId);
+  if (!usersExist) {
+    throw createHttpError(404, "One or both users were not found.");
+  }
+
+  const db = getDb();
+  const existingInvite = await getDirectInviteByPair(requesterId, otherUserId);
+
+  if (existingInvite) {
+    if (existingInvite.status !== "accepted") {
+      throw createHttpError(409, "This friendship is not active.");
+    }
+
+    await db.execute(
+      `
+      UPDATE direct_invites
+      SET status = 'removed', responded_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+      `,
+      [existingInvite.id]
+    );
+
+    return getDirectInviteById(existingInvite.id);
+  }
+
+  if (!(await usersHaveDirectHistory(requesterId, otherUserId))) {
+    throw createHttpError(404, "Friendship not found.");
+  }
+
+  const [result] = await db.execute(
+    `
+    INSERT INTO direct_invites (pair_key, sender_id, receiver_id, status, responded_at)
+    VALUES (?, ?, ?, 'removed', CURRENT_TIMESTAMP)
+    `,
+    [buildDirectPairKey(requesterId, otherUserId), requesterId, otherUserId]
+  );
+
+  return getDirectInviteById(result.insertId);
 }
 
 async function persistCallLogMessage(callerId, calleeId) {
@@ -1475,12 +1520,16 @@ app.get("/users", async (req, res) => {
       createdAt: toIsoString(row.created_at),
       directInviteId: row.direct_invite_id || null,
       directRelationStatus: viewerId
-        ? row.has_direct_history || row.direct_invite_status === "accepted"
-          ? "accepted"
-          : row.direct_invite_status === "pending"
-            ? Number(row.direct_invite_sender_id) === viewerId
-              ? "outgoing_pending"
-              : "incoming_pending"
+        ? row.direct_invite_id
+          ? row.direct_invite_status === "accepted"
+            ? "accepted"
+            : row.direct_invite_status === "pending"
+              ? Number(row.direct_invite_sender_id) === viewerId
+                ? "outgoing_pending"
+                : "incoming_pending"
+              : "none"
+          : row.has_direct_history
+            ? "accepted"
             : "none"
         : null,
     }));
@@ -1612,7 +1661,7 @@ app.get("/conversations", async (req, res) => {
     }
 
     const db = getDb();
-    const params = [userId, userId, userId, userId, userId, userId, userId];
+    const params = [userId, userId, userId, userId, userId, userId, userId, userId, userId];
     let searchFilter = "";
     if (searchTerm) {
       searchFilter = " AND u.username LIKE ? ";
@@ -1655,15 +1704,23 @@ app.get("/conversations", async (req, res) => {
               AND di.status = 'accepted'
             LIMIT 1
           )
-          OR EXISTS (
-            SELECT 1
-            FROM messages dm
-            WHERE (
-              (dm.sender_id = ? AND dm.receiver_id = u.id)
-              OR
-              (dm.sender_id = u.id AND dm.receiver_id = ?)
+          OR (
+            NOT EXISTS (
+              SELECT 1
+              FROM direct_invites di_existing
+              WHERE di_existing.pair_key = CONCAT(LEAST(?, u.id), ':', GREATEST(?, u.id))
+              LIMIT 1
             )
-            LIMIT 1
+            AND EXISTS (
+              SELECT 1
+              FROM messages dm
+              WHERE (
+                (dm.sender_id = ? AND dm.receiver_id = u.id)
+                OR
+                (dm.sender_id = u.id AND dm.receiver_id = ?)
+              )
+              LIMIT 1
+            )
           )
         )
       ${searchFilter}
@@ -1773,6 +1830,35 @@ app.post("/direct-invites/:id/respond", async (req, res) => {
       console.error("[direct-invites:respond] failed:", error);
     }
     return res.status(status).json({ error: error.message || "Failed to respond to invite." });
+  }
+});
+
+app.post("/friends/:id/remove", async (req, res) => {
+  try {
+    const friendId = toPositiveInt(req.params.id);
+    const requesterId = toPositiveInt(req.body.requesterId ?? req.body.userId);
+
+    if (!friendId || !requesterId) {
+      return res.status(400).json({ error: "Valid friend id and requesterId are required." });
+    }
+
+    const invite = await removeDirectFriendship(requesterId, friendId);
+    const payload = {
+      action: "removed",
+      invite: serializeDirectInvite(invite),
+    };
+    emitDirectInviteUpdate(requesterId, friendId, payload);
+
+    return res.json({
+      message: "Friend removed.",
+      invite: payload.invite,
+    });
+  } catch (error) {
+    const status = error.status || 500;
+    if (status >= 500) {
+      console.error("[friends:remove] failed:", error);
+    }
+    return res.status(status).json({ error: error.message || "Failed to remove friend." });
   }
 });
 
@@ -2505,6 +2591,40 @@ io.on("connection", (socket) => {
 
       if (typeof callback === "function") {
         callback({ ok: false, error: error.message || "Failed to respond to invite." });
+      }
+    }
+  });
+
+  socket.on("remove_friend", async (payload, callback) => {
+    try {
+      const requesterId = toPositiveInt(payload && (payload.requesterId ?? payload.userId));
+      const friendId = toPositiveInt(payload && (payload.friendId ?? payload.targetUserId));
+      const registeredUserId = toPositiveInt(socket.data.userId);
+
+      if (!requesterId || !friendId) {
+        throw createHttpError(400, "requesterId and friendId are required.");
+      }
+      if (registeredUserId && requesterId !== registeredUserId) {
+        throw createHttpError(403, "Invalid user identity.");
+      }
+
+      const invite = await removeDirectFriendship(requesterId, friendId);
+      const message = {
+        action: "removed",
+        invite: serializeDirectInvite(invite),
+      };
+      emitDirectInviteUpdate(requesterId, friendId, message);
+
+      if (typeof callback === "function") {
+        callback({ ok: true, message });
+      }
+    } catch (error) {
+      if ((error.status || 500) >= 500) {
+        console.error("[socket remove_friend] failed:", error);
+      }
+
+      if (typeof callback === "function") {
+        callback({ ok: false, error: error.message || "Failed to remove friend." });
       }
     }
   });

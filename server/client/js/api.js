@@ -54,6 +54,12 @@
         body: { userId, action },
       });
     },
+    removeFriend(requesterId, friendId) {
+      return request(`/friends/${friendId}/remove`, {
+        method: "POST",
+        body: { requesterId },
+      });
+    },
     fetchConversations(userId, search) {
       const query = toQuery({ userId, search });
       return request(`/conversations?${query}`);

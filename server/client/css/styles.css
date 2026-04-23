@@ -325,18 +325,16 @@ label {
 }
 
 .conversation-title-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
+  display: grid;
+  gap: 14px;
+  align-items: stretch;
 }
 
 .conversation-head-actions {
-  display: flex;
-  align-items: center;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
-  flex-wrap: wrap;
-  justify-content: flex-end;
+  align-items: stretch;
 }
 
 .conversation-pane-head p {
@@ -347,6 +345,8 @@ label {
 
 .header-action-btn {
   flex-shrink: 0;
+  width: 100%;
+  min-width: 0;
   padding-inline: 14px;
 }
 
@@ -355,8 +355,10 @@ label {
   align-items: center;
   justify-content: center;
   gap: 10px;
+  width: 100%;
   min-height: 48px;
-  padding: 10px 14px;
+  min-width: 0;
+  padding: 10px 12px;
   border-radius: 16px;
   font-size: 0.82rem;
   font-weight: 800;
@@ -381,6 +383,8 @@ label {
 .quick-action-label {
   white-space: nowrap;
   letter-spacing: 0.01em;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .new-group-btn {

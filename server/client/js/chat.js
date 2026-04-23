@@ -537,7 +537,15 @@ document.addEventListener("DOMContentLoaded", () => {
         const pill = document.createElement("span");
         pill.className = "invite-pill connected";
         pill.textContent = "Friends";
-        actions.appendChild(pill);
+        const removeBtn = document.createElement("button");
+        removeBtn.type = "button";
+        removeBtn.className = "secondary-btn";
+        removeBtn.textContent = "Remove";
+        removeBtn.addEventListener("click", async () => {
+          await removeFriend(user.id, user.username, { source: "modal" });
+        });
+
+        actions.append(pill, removeBtn);
       } else if (user.directRelationStatus === "outgoing_pending") {
         const pill = document.createElement("span");
         pill.className = "invite-pill pending";
@@ -616,6 +624,45 @@ document.addEventListener("DOMContentLoaded", () => {
       );
     } catch (error) {
       setInviteModalStatus(error.message, true);
+    }
+  }
+
+  async function removeFriend(friendId, friendName, options = {}) {
+    const normalizedFriendId = Number(friendId);
+    if (!normalizedFriendId) {
+      return;
+    }
+
+    const label = friendName || `User ${normalizedFriendId}`;
+    const confirmed = window.confirm(`Remove ${label} from your friends list?`);
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      if (socket.connected) {
+        await emitAck("remove_friend", {
+          requesterId: currentUser.id,
+          friendId: normalizedFriendId,
+        });
+      } else {
+        await window.Api.removeFriend(currentUser.id, normalizedFriendId);
+      }
+
+      await refreshChatLists();
+      toggleChatMenu(false);
+
+      if (options.source === "modal") {
+        setInviteModalStatus("Friend removed.", false);
+      } else {
+        setStatus("Friend removed.", false);
+      }
+    } catch (error) {
+      if (options.source === "modal") {
+        setInviteModalStatus(error.message, true);
+      } else {
+        setStatus(error.message, true);
+      }
     }
   }
 
@@ -778,6 +825,16 @@ document.addEventListener("DOMContentLoaded", () => {
     els.menuUsername.textContent = selected.username;
     els.menuUserStatus.textContent = selected.online ? "Online" : "Offline";
     els.menuUserStatus.style.color = selected.online ? "#15814a" : "var(--muted)";
+
+    const removeFriendBtn = document.createElement("button");
+    removeFriendBtn.type = "button";
+    removeFriendBtn.className = "danger-btn";
+    removeFriendBtn.textContent = "Remove Friend";
+    removeFriendBtn.addEventListener("click", async () => {
+      await removeFriend(selected.userId, selected.username);
+    });
+
+    els.chatMenuExtra.append(removeFriendBtn);
   }
   const isOpenDirectMessage = (m) =>
     isDirectChatSelected() &&
@@ -3269,6 +3326,8 @@ document.addEventListener("DOMContentLoaded", () => {
           showAnnouncement("You received a new friend request.");
         } else if (action === "accepted" && invite) {
           showAnnouncement("Friend request accepted. You can chat and call now.");
+        } else if (action === "removed" && invite) {
+          showAnnouncement("A friendship was removed. Direct chat is now locked.");
         }
 
         await refreshChatLists();
