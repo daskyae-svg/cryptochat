@@ -31,6 +31,7 @@ const {
 } = require("./certificateRevocationList");
 
 const SERVER_PORT = Number(process.env.PORT || process.env.SERVER_PORT || 3000);
+const ADMIN_USER_ID = 2;
 const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN || "*";
 const HOST = "0.0.0.0";
 const GIPHY_API_KEY = process.env.GIPHY_API_KEY || "";
@@ -242,6 +243,12 @@ function createHttpError(status, message) {
   const error = new Error(message);
   error.status = status;
   return error;
+}
+
+function requireAdminUser(userId) {
+  if (Number(userId) !== ADMIN_USER_ID) {
+    throw createHttpError(403, "Only the application admin can do that.");
+  }
 }
 
 async function assertCertificateNotRevoked(userId, options = {}) {
@@ -694,10 +701,137 @@ function getGroupRoomName(groupId) {
   return `group_${groupId}`;
 }
 
+function serializeUserBlock(blockRow) {
+  if (!blockRow) {
+    return null;
+  }
+
+  return {
+    blockerId: Number(blockRow.blocker_id),
+    blockedId: Number(blockRow.blocked_id),
+    createdAt: toIsoString(blockRow.created_at),
+  };
+}
+
 function buildDirectPairKey(userIdA, userIdB) {
   const left = Math.min(Number(userIdA) || 0, Number(userIdB) || 0);
   const right = Math.max(Number(userIdA) || 0, Number(userIdB) || 0);
   return `${left}:${right}`;
+}
+
+async function getUserBlocksBetween(userIdA, userIdB) {
+  const db = getDb();
+  const [rows] = await db.execute(
+    `
+    SELECT blocker_id, blocked_id, created_at
+    FROM user_blocks
+    WHERE (blocker_id = ? AND blocked_id = ?)
+       OR (blocker_id = ? AND blocked_id = ?)
+    ORDER BY created_at ASC, id ASC
+    `,
+    [userIdA, userIdB, userIdB, userIdA]
+  );
+
+  return rows;
+}
+
+async function getDirectBlockState(userId, otherUserId) {
+  const rows = await getUserBlocksBetween(userId, otherUserId);
+  const blockedByUser = rows.some(
+    (row) => Number(row.blocker_id) === Number(userId) && Number(row.blocked_id) === Number(otherUserId)
+  );
+  const blockedUser = rows.some(
+    (row) => Number(row.blocker_id) === Number(otherUserId) && Number(row.blocked_id) === Number(userId)
+  );
+
+  return {
+    blockedByUser,
+    blockedUser,
+    isBlocked: blockedByUser || blockedUser,
+    blocks: rows.map((row) => serializeUserBlock(row)),
+  };
+}
+
+async function findDirectBlockRelations(viewerId, otherUserIds) {
+  const normalizedViewerId = toPositiveInt(viewerId);
+  const safeOtherUserIds = uniquePositiveInts(otherUserIds).filter((userId) => userId !== normalizedViewerId);
+  const relations = new Map();
+
+  safeOtherUserIds.forEach((userId) => {
+    relations.set(Number(userId), {
+      blockedByViewer: false,
+      blockedViewer: false,
+    });
+  });
+
+  if (!normalizedViewerId || !safeOtherUserIds.length) {
+    return relations;
+  }
+
+  const db = getDb();
+  const placeholders = safeOtherUserIds.map(() => "?").join(", ");
+  const [rows] = await db.execute(
+    `
+    SELECT blocker_id, blocked_id
+    FROM user_blocks
+    WHERE (blocker_id = ? AND blocked_id IN (${placeholders}))
+       OR (blocked_id = ? AND blocker_id IN (${placeholders}))
+    `,
+    [normalizedViewerId, ...safeOtherUserIds, normalizedViewerId, ...safeOtherUserIds]
+  );
+
+  rows.forEach((row) => {
+    const blockerId = Number(row.blocker_id);
+    const blockedId = Number(row.blocked_id);
+    const otherUserId = blockerId === normalizedViewerId ? blockedId : blockerId;
+    const relation = relations.get(otherUserId) || {
+      blockedByViewer: false,
+      blockedViewer: false,
+    };
+
+    if (blockerId === normalizedViewerId) {
+      relation.blockedByViewer = true;
+    }
+    if (blockedId === normalizedViewerId) {
+      relation.blockedViewer = true;
+    }
+
+    relations.set(otherUserId, relation);
+  });
+
+  return relations;
+}
+
+async function assertUsersNotBlocked(userId, otherUserId) {
+  const blockState = await getDirectBlockState(userId, otherUserId);
+  if (!blockState.isBlocked) {
+    return blockState;
+  }
+
+  if (blockState.blockedByUser && blockState.blockedUser) {
+    throw createHttpError(403, "This conversation is blocked.");
+  }
+  if (blockState.blockedByUser) {
+    throw createHttpError(403, "You blocked this user.");
+  }
+
+  throw createHttpError(403, "This user blocked you.");
+}
+
+function emitDirectBlockUpdate(blockerId, blockedId, action, block = null) {
+  const payload = {
+    action,
+    block: block ? serializeUserBlock(block) : {
+      blockerId: Number(blockerId),
+      blockedId: Number(blockedId),
+      createdAt: new Date().toISOString(),
+    },
+  };
+
+  emitToUser(blockerId, "direct_block_updated", payload);
+  if (Number(blockedId) !== Number(blockerId)) {
+    emitToUser(blockedId, "direct_block_updated", payload);
+  }
 }
 
 async function getDirectInviteByPair(userIdA, userIdB) {
@@ -769,6 +903,11 @@ async function canUsersDirectlyInteract(userIdA, userIdB) {
     return false;
   }
 
+  const blockState = await getDirectBlockState(userIdA, userIdB);
+  if (blockState.isBlocked) {
+    return false;
+  }
+
   const directInvite = await getDirectInviteByPair(userIdA, userIdB);
   if (directInvite) {
     return directInvite.status === "accepted";
@@ -782,6 +921,8 @@ async function ensureDirectAccess(userIdA, userIdB) {
   if (!usersExist) {
     throw createHttpError(404, "Sender or receiver not found.");
   }
+
+  await assertUsersNotBlocked(userIdA, userIdB);
 
   const allowed = await canUsersDirectlyInteract(userIdA, userIdB);
   if (!allowed) {
@@ -805,6 +946,8 @@ async function createDirectInvite(senderId, receiverId) {
   if (!usersExist) {
     throw createHttpError(404, "One or both users were not found.");
   }
+
+  await assertUsersNotBlocked(senderId, receiverId);
 
   const existingInvite = await getDirectInviteByPair(senderId, receiverId);
   const db = getDb();
@@ -860,6 +1003,8 @@ async function respondToDirectInvite(inviteId, userId, action) {
   if (invite.status !== "pending") {
     throw createHttpError(409, "This invite has already been handled.");
   }
+
+  await assertUsersNotBlocked(userId, invite.sender_id);
 
   const db = getDb();
   const nextStatus = normalizedAction === "accept" ? "accepted" : "rejected";
@@ -918,6 +1063,65 @@ async function removeDirectFriendship(requesterId, otherUserId) {
   );
 
   return getDirectInviteById(result.insertId);
+}
+
+async function blockDirectUser(requesterId, blockedUserId) {
+  if (!requesterId || !blockedUserId || requesterId === blockedUserId) {
+    throw createHttpError(400, "Valid requesterId and blockedUserId are required.");
+  }
+
+  const usersExist = await ensureUsersExist(requesterId, blockedUserId);
+  if (!usersExist) {
+    throw createHttpError(404, "One or both users were not found.");
+  }
+
+  const db = getDb();
+  await db.execute(
+    `
+    INSERT INTO user_blocks (blocker_id, blocked_id)
+    VALUES (?, ?)
+    ON DUPLICATE KEY UPDATE blocker_id = blocker_id
+    `,
+    [requesterId, blockedUserId]
+  );
+
+  const [rows] = await db.execute(
+    `
+    SELECT blocker_id, blocked_id, created_at
+    FROM user_blocks
+    WHERE blocker_id = ? AND blocked_id = ?
+    LIMIT 1
+    `,
+    [requesterId, blockedUserId]
+  );
+
+  return rows[0] || null;
+}
+
+async function unblockDirectUser(requesterId, blockedUserId) {
+  if (!requesterId || !blockedUserId || requesterId === blockedUserId) {
+    throw createHttpError(400, "Valid requesterId and blockedUserId are required.");
+  }
+
+  const usersExist = await ensureUsersExist(requesterId, blockedUserId);
+  if (!usersExist) {
+    throw createHttpError(404, "One or both users were not found.");
+  }
+
+  const db = getDb();
+  await db.execute(
+    `
+    DELETE FROM user_blocks
+    WHERE blocker_id = ? AND blocked_id = ?
+    `,
+    [requesterId, blockedUserId]
+  );
+
+  return {
+    blocker_id: requesterId,
+    blocked_id: blockedUserId,
+    created_at: new Date(),
+  };
 }
 
 async function persistCallLogMessage(callerId, calleeId) {
@@ -1829,9 +2033,11 @@ app.get("/users/:id/certificate", async (req, res) => {
 app.post("/revoke/:userId", async (req, res) => {
   try {
     const userId = toPositiveInt(req.params.userId);
+    const requesterId = toPositiveInt(req.body.requesterId ?? req.body.userId);
     if (!userId) {
       return res.status(400).json({ error: "Valid user id is required." });
     }
+    requireAdminUser(requesterId);
 
     const user = await findUserById(userId);
     if (!user) {
@@ -1854,11 +2060,16 @@ app.post("/revoke/:userId", async (req, res) => {
 
 app.get("/crl", async (_req, res) => {
   try {
+    const requesterId = toPositiveInt(_req.query.requesterId ?? _req.query.userId);
+    requireAdminUser(requesterId);
     const revokedUsers = await listRevokedCertificates();
     return res.json({ revokedUsers });
   } catch (error) {
-    console.error("[crl] failed:", error);
-    return res.status(500).json({ error: "Failed to load certificate revocation list." });
+    const status = error.status || 500;
+    if (status >= 500) {
+      console.error("[crl] failed:", error);
+    }
+    return res.status(status).json({ error: error.message || "Failed to load certificate revocation list." });
   }
 });
 
@@ -1965,7 +2176,28 @@ app.get("/users", async (req, res) => {
     query += " ORDER BY username ASC";
 
     const [rows] = await db.execute(query, params);
+    const blockRelationMap = viewerId
+      ? await findDirectBlockRelations(viewerId, rows.map((row) => Number(row.id)))
+      : new Map();
     const users = rows.map((row) => ({
+      ...(function () {
+        const relation = viewerId
+          ? blockRelationMap.get(Number(row.id)) || { blockedByViewer: false, blockedViewer: false }
+          : { blockedByViewer: false, blockedViewer: false };
+        const blockStatus = relation.blockedByViewer
+          ? relation.blockedViewer
+            ? "mutual_block"
+            : "blocked_by_you"
+          : relation.blockedViewer
+            ? "blocked_you"
+            : "none";
+
+        return {
+          blockedByViewer: relation.blockedByViewer,
+          blockedViewer: relation.blockedViewer,
+          blockStatus,
+        };
+      })(),
       id: row.id,
       username: row.username,
       avatarUrl: row.avatar_url || null,
@@ -1974,16 +2206,40 @@ app.get("/users", async (req, res) => {
       directInviteId: row.direct_invite_id || null,
       directRelationStatus: viewerId
         ? row.direct_invite_id
-          ? row.direct_invite_status === "accepted"
-            ? "accepted"
-            : row.direct_invite_status === "pending"
-              ? Number(row.direct_invite_sender_id) === viewerId
-                ? "outgoing_pending"
-                : "incoming_pending"
-              : "none"
-          : row.has_direct_history
-            ? "accepted"
-            : "none"
+          ? (() => {
+              const relation = blockRelationMap.get(Number(row.id)) || {
+                blockedByViewer: false,
+                blockedViewer: false,
+              };
+              if (relation.blockedByViewer) {
+                return relation.blockedViewer ? "mutual_block" : "blocked_by_you";
+              }
+              if (relation.blockedViewer) {
+                return "blocked_you";
+              }
+              if (row.direct_invite_status === "accepted") {
+                return "accepted";
+              }
+              if (row.direct_invite_status === "pending") {
+                return Number(row.direct_invite_sender_id) === viewerId
+                  ? "outgoing_pending"
+                  : "incoming_pending";
+              }
+              return "none";
+            })()
+          : (() => {
+              const relation = blockRelationMap.get(Number(row.id)) || {
+                blockedByViewer: false,
+                blockedViewer: false,
+              };
+              if (relation.blockedByViewer) {
+                return relation.blockedViewer ? "mutual_block" : "blocked_by_you";
+              }
+              if (relation.blockedViewer) {
+                return "blocked_you";
+              }
+              return row.has_direct_history ? "accepted" : "none";
+            })()
         : null,
     }));
 
@@ -2201,8 +2457,16 @@ app.get("/conversations", async (req, res) => {
       userId,
       ...rows.map((row) => Number(row.user_id)).filter(Boolean),
     ]);
+    const blockRelationMap = await findDirectBlockRelations(
+      userId,
+      rows.map((row) => Number(row.user_id)).filter(Boolean)
+    );
 
     const conversations = await Promise.all(rows.map(async (row) => {
+      const blockRelation = blockRelationMap.get(Number(row.user_id)) || {
+        blockedByViewer: false,
+        blockedViewer: false,
+      };
       let lastMessage = null;
       if (row.message_id) {
         try {
@@ -2251,6 +2515,8 @@ app.get("/conversations", async (req, res) => {
         username: row.username,
         avatarUrl: row.avatar_url || null,
         online: isUserOnline(row.user_id),
+        blockedByViewer: blockRelation.blockedByViewer,
+        blockedViewer: blockRelation.blockedViewer,
         lastMessage,
       };
     }));
@@ -2347,6 +2613,56 @@ app.post("/friends/:id/remove", async (req, res) => {
       console.error("[friends:remove] failed:", error);
     }
     return res.status(status).json({ error: error.message || "Failed to remove friend." });
+  }
+});
+
+app.post("/users/:id/block", async (req, res) => {
+  try {
+    const blockedUserId = toPositiveInt(req.params.id);
+    const requesterId = toPositiveInt(req.body.requesterId ?? req.body.userId);
+
+    if (!blockedUserId || !requesterId) {
+      return res.status(400).json({ error: "Valid blocked user id and requesterId are required." });
+    }
+
+    const block = await blockDirectUser(requesterId, blockedUserId);
+    emitDirectBlockUpdate(requesterId, blockedUserId, "blocked", block);
+
+    return res.status(201).json({
+      message: "User blocked.",
+      block: serializeUserBlock(block),
+    });
+  } catch (error) {
+    const status = error.status || 500;
+    if (status >= 500) {
+      console.error("[users:block] failed:", error);
+    }
+    return res.status(status).json({ error: error.message || "Failed to block user." });
+  }
+});
+
+app.post("/users/:id/unblock", async (req, res) => {
+  try {
+    const blockedUserId = toPositiveInt(req.params.id);
+    const requesterId = toPositiveInt(req.body.requesterId ?? req.body.userId);
+
+    if (!blockedUserId || !requesterId) {
+      return res.status(400).json({ error: "Valid blocked user id and requesterId are required." });
+    }
+
+    const block = await unblockDirectUser(requesterId, blockedUserId);
+    emitDirectBlockUpdate(requesterId, blockedUserId, "unblocked", block);
+
+    return res.json({
+      message: "User unblocked.",
+      block: serializeUserBlock(block),
+    });
+  } catch (error) {
+    const status = error.status || 500;
+    if (status >= 500) {
+      console.error("[users:unblock] failed:", error);
+    }
+    return res.status(status).json({ error: error.message || "Failed to unblock user." });
   }
 });
 
@@ -3126,6 +3442,74 @@ io.on("connection", (socket) => {
 
       if (typeof callback === "function") {
         callback({ ok: false, error: error.message || "Failed to remove friend." });
+      }
+    }
+  });
+
+  socket.on("block_user", async (payload, callback) => {
+    try {
+      const requesterId = toPositiveInt(payload && (payload.requesterId ?? payload.userId));
+      const blockedUserId = toPositiveInt(payload && (payload.blockedUserId ?? payload.targetUserId));
+      const registeredUserId = toPositiveInt(socket.data.userId);
+
+      if (!requesterId || !blockedUserId) {
+        throw createHttpError(400, "requesterId and blockedUserId are required.");
+      }
+      if (registeredUserId && requesterId !== registeredUserId) {
+        throw createHttpError(403, "Invalid user identity.");
+      }
+
+      const block = await blockDirectUser(requesterId, blockedUserId);
+      const message = {
+        action: "blocked",
+        block: serializeUserBlock(block),
+      };
+      emitDirectBlockUpdate(requesterId, blockedUserId, "blocked", block);
+
+      if (typeof callback === "function") {
+        callback({ ok: true, message });
+      }
+    } catch (error) {
+      if ((error.status || 500) >= 500) {
+        console.error("[socket block_user] failed:", error);
+      }
+
+      if (typeof callback === "function") {
+        callback({ ok: false, error: error.message || "Failed to block user." });
+      }
+    }
+  });
+
+  socket.on("unblock_user", async (payload, callback) => {
+    try {
+      const requesterId = toPositiveInt(payload && (payload.requesterId ?? payload.userId));
+      const blockedUserId = toPositiveInt(payload && (payload.blockedUserId ?? payload.targetUserId));
+      const registeredUserId = toPositiveInt(socket.data.userId);
+
+      if (!requesterId || !blockedUserId) {
+        throw createHttpError(400, "requesterId and blockedUserId are required.");
+      }
+      if (registeredUserId && requesterId !== registeredUserId) {
+        throw createHttpError(403, "Invalid user identity.");
+      }
+
+      const block = await unblockDirectUser(requesterId, blockedUserId);
+      const message = {
+        action: "unblocked",
+        block: serializeUserBlock(block),
+      };
+      emitDirectBlockUpdate(requesterId, blockedUserId, "unblocked", block);
+
+      if (typeof callback === "function") {
+        callback({ ok: true, message });
+      }
+    } catch (error) {
+      if ((error.status || 500) >= 500) {
+        console.error("[socket unblock_user] failed:", error);
+      }
+
+      if (typeof callback === "function") {
+        callback({ ok: false, error: error.message || "Failed to unblock user." });
       }
     }
   });

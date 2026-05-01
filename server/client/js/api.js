@@ -60,6 +60,24 @@
         body: { requesterId },
       });
     },
+    blockUser(requesterId, blockedUserId) {
+      return request(`/users/${blockedUserId}/block`, {
+        method: "POST",
+        body: { requesterId },
+      });
+    },
+    unblockUser(requesterId, blockedUserId) {
+      return request(`/users/${blockedUserId}/unblock`, {
+        method: "POST",
+        body: { requesterId },
+      });
+    },
+    revokeCertificate(requesterId, targetUserId) {
+      return request(`/revoke/${targetUserId}`, {
+        method: "POST",
+        body: { requesterId },
+      });
+    },
     fetchConversations(userId, search) {
       const query = toQuery({ userId, search });
       return request(`/conversations?${query}`);

@@ -141,6 +141,20 @@ async function createTables() {
     );
   `;
 
+  const userBlocksTableSql = `
+    CREATE TABLE IF NOT EXISTS user_blocks (
+      id INT PRIMARY KEY AUTO_INCREMENT,
+      blocker_id INT NOT NULL,
+      blocked_id INT NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT fk_user_blocks_blocker FOREIGN KEY (blocker_id) REFERENCES users(id) ON DELETE CASCADE,
+      CONSTRAINT fk_user_blocks_blocked FOREIGN KEY (blocked_id) REFERENCES users(id) ON DELETE CASCADE,
+      CONSTRAINT uq_user_blocks_pair UNIQUE (blocker_id, blocked_id),
+      INDEX idx_user_blocks_blocker (blocker_id, created_at),
+      INDEX idx_user_blocks_blocked (blocked_id, created_at)
+    );
+  `;
+
   const groupsTableSql = `
     CREATE TABLE IF NOT EXISTS \`groups\` (
       id INT PRIMARY KEY AUTO_INCREMENT,
@@ -181,6 +195,7 @@ async function createTables() {
   await pool.query(messagesTableSql);
   await pool.query(directInvitesTableSql);
   await pool.query(revokedCertificatesTableSql);
+  await pool.query(userBlocksTableSql);
   await pool.query(groupsTableSql);
   await pool.query(groupMembersTableSql);
   await pool.query(groupMessagesTableSql);

@@ -67,6 +67,7 @@ document.addEventListener("DOMContentLoaded", () => {
     closeGifBtn: $("closeGifBtn"),
     gifSearchInput: $("gifSearchInput"),
     gifResults: $("gifResults"),
+    sendBtn: $("sendBtn"),
     themeToggleBtn: $("themeToggleBtn"),
     refreshUsersBtn: $("refreshUsersBtn"),
     navChatsBtn: $("navChatsBtn"),
@@ -291,6 +292,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const isGroupChatSelected = () =>
     state.selectedChatKind === CHAT.GROUP && Boolean(state.selectedGroupId);
   const hasSelectedChat = () => isDirectChatSelected() || isGroupChatSelected();
+  const isAdminUser = () => Number(currentUser.id) === 2;
 
   function getSelectedGroup() {
     return state.groups.find((group) => group.id === state.selectedGroupId) || null;
@@ -298,6 +300,22 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function getSelectedChat() {
     return isGroupChatSelected() ? getSelectedGroup() : getSelectedConversation();
+  }
+
+  function getDirectBlockLabel(item) {
+    if (!item) {
+      return "";
+    }
+    if (item.blockedByViewer && item.blockedViewer) {
+      return "Both users blocked each other";
+    }
+    if (item.blockedByViewer) {
+      return "You blocked this user";
+    }
+    if (item.blockedViewer) {
+      return "This user blocked you";
+    }
+    return "";
   }
 
   function isMobileViewport() {
@@ -422,8 +440,13 @@ document.addEventListener("DOMContentLoaded", () => {
         return 2;
       case "accepted":
         return 3;
-      default:
+      case "blocked_you":
         return 4;
+      case "blocked_by_you":
+      case "mutual_block":
+        return 5;
+      default:
+        return 6;
     }
   }
 
@@ -461,6 +484,9 @@ document.addEventListener("DOMContentLoaded", () => {
             online: Boolean(user.online),
             directInviteId: user.directInviteId ? Number(user.directInviteId) : null,
             directRelationStatus: user.directRelationStatus || "none",
+            blockedByViewer: Boolean(user.blockedByViewer),
+            blockedViewer: Boolean(user.blockedViewer),
+            blockStatus: user.blockStatus || "none",
           };
           state.userMap.set(normalizedUser.id, {
             username: normalizedUser.username,
@@ -525,7 +551,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       const status = document.createElement("p");
       status.className = "group-member-option-status";
-      status.textContent = user.online ? "Online" : "Offline";
+      status.textContent = getDirectBlockLabel(user) || (user.online ? "Online" : "Offline");
 
       meta.append(name, status);
       main.append(avatar, meta);
@@ -533,7 +559,25 @@ document.addEventListener("DOMContentLoaded", () => {
       const actions = document.createElement("div");
       actions.className = "invite-option-actions";
 
-      if (user.directRelationStatus === "accepted") {
+      if (user.directRelationStatus === "blocked_by_you" || user.directRelationStatus === "mutual_block") {
+        const pill = document.createElement("span");
+        pill.className = "invite-pill pending";
+        pill.textContent = user.directRelationStatus === "mutual_block" ? "Blocked Both Ways" : "Blocked";
+        const unblockBtn = document.createElement("button");
+        unblockBtn.type = "button";
+        unblockBtn.className = "secondary-btn";
+        unblockBtn.textContent = "Unblock";
+        unblockBtn.addEventListener("click", async () => {
+          await unblockUser(user.id, user.username, { source: "modal" });
+        });
+
+        actions.append(pill, unblockBtn);
+      } else if (user.directRelationStatus === "blocked_you") {
+        const pill = document.createElement("span");
+        pill.className = "invite-pill pending";
+        pill.textContent = "Blocked You";
+        actions.appendChild(pill);
+      } else if (user.directRelationStatus === "accepted") {
         const pill = document.createElement("span");
         pill.className = "invite-pill connected";
         pill.textContent = "Friends";
@@ -663,6 +707,110 @@ document.addEventListener("DOMContentLoaded", () => {
       } else {
         setStatus(error.message, true);
       }
+    }
+  }
+
+  async function blockUser(targetUserId, targetName, options = {}) {
+    const normalizedTargetUserId = Number(targetUserId);
+    if (!normalizedTargetUserId) {
+      return;
+    }
+
+    const label = targetName || `User ${normalizedTargetUserId}`;
+    const confirmed = window.confirm(`Block ${label}? They will not be able to message or call you.`);
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      if (socket.connected) {
+        await emitAck("block_user", {
+          requesterId: currentUser.id,
+          blockedUserId: normalizedTargetUserId,
+        });
+      } else {
+        await window.Api.blockUser(currentUser.id, normalizedTargetUserId);
+      }
+
+      if (state.call.callId && state.call.peerUserId === normalizedTargetUserId) {
+        finishCall(true, "Call ended because this user was blocked.");
+      }
+
+      await refreshChatLists();
+      toggleChatMenu(false);
+
+      if (options.source === "modal") {
+        setInviteModalStatus("User blocked.", false);
+      } else {
+        setStatus("User blocked.", false);
+      }
+    } catch (error) {
+      if (options.source === "modal") {
+        setInviteModalStatus(error.message, true);
+      } else {
+        setStatus(error.message, true);
+      }
+    }
+  }
+
+  async function unblockUser(targetUserId, targetName, options = {}) {
+    const normalizedTargetUserId = Number(targetUserId);
+    if (!normalizedTargetUserId) {
+      return;
+    }
+
+    const label = targetName || `User ${normalizedTargetUserId}`;
+    const confirmed = window.confirm(`Unblock ${label}?`);
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      if (socket.connected) {
+        await emitAck("unblock_user", {
+          requesterId: currentUser.id,
+          blockedUserId: normalizedTargetUserId,
+        });
+      } else {
+        await window.Api.unblockUser(currentUser.id, normalizedTargetUserId);
+      }
+
+      await refreshChatLists();
+      toggleChatMenu(false);
+
+      if (options.source === "modal") {
+        setInviteModalStatus("User unblocked.", false);
+      } else {
+        setStatus("User unblocked.", false);
+      }
+    } catch (error) {
+      if (options.source === "modal") {
+        setInviteModalStatus(error.message, true);
+      } else {
+        setStatus(error.message, true);
+      }
+    }
+  }
+
+  async function revokeUserCertificate(targetUserId, targetName) {
+    const normalizedTargetUserId = Number(targetUserId);
+    if (!normalizedTargetUserId || !isAdminUser()) {
+      return;
+    }
+
+    const label = targetName || `User ${normalizedTargetUserId}`;
+    const confirmed = window.confirm(`Revoke ${label}'s certificate? This is admin-only.`);
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      await window.Api.revokeCertificate(currentUser.id, normalizedTargetUserId);
+      await refreshChatLists();
+      toggleChatMenu(false);
+      setStatus("Certificate revoked.", false);
+    } catch (error) {
+      setStatus(error.message, true);
     }
   }
 
@@ -823,8 +971,22 @@ document.addEventListener("DOMContentLoaded", () => {
 
     paintAvatar(els.menuUserAvatar, selected.username, selected.avatarUrl);
     els.menuUsername.textContent = selected.username;
-    els.menuUserStatus.textContent = selected.online ? "Online" : "Offline";
-    els.menuUserStatus.style.color = selected.online ? "#15814a" : "var(--muted)";
+    const blockLabel = getDirectBlockLabel(selected);
+    els.menuUserStatus.textContent = blockLabel || (selected.online ? "Online" : "Offline");
+    els.menuUserStatus.style.color =
+      blockLabel ? "var(--danger)" : selected.online ? "#15814a" : "var(--muted)";
+
+    const blockBtn = document.createElement("button");
+    blockBtn.type = "button";
+    blockBtn.className = selected.blockedByViewer ? "secondary-btn" : "danger-btn";
+    blockBtn.textContent = selected.blockedByViewer ? "Unblock User" : "Block User";
+    blockBtn.addEventListener("click", async () => {
+      if (selected.blockedByViewer) {
+        await unblockUser(selected.userId, selected.username);
+      } else {
+        await blockUser(selected.userId, selected.username);
+      }
+    });
 
     const removeFriendBtn = document.createElement("button");
     removeFriendBtn.type = "button";
@@ -834,7 +996,18 @@ document.addEventListener("DOMContentLoaded", () => {
       await removeFriend(selected.userId, selected.username);
     });
 
-    els.chatMenuExtra.append(removeFriendBtn);
+    els.chatMenuExtra.append(blockBtn, removeFriendBtn);
+
+    if (isAdminUser() && selected.userId !== currentUser.id) {
+      const revokeBtn = document.createElement("button");
+      revokeBtn.type = "button";
+      revokeBtn.className = "danger-btn";
+      revokeBtn.textContent = "Revoke Certificate";
+      revokeBtn.addEventListener("click", async () => {
+        await revokeUserCertificate(selected.userId, selected.username);
+      });
+      els.chatMenuExtra.append(revokeBtn);
+    }
   }
   const isOpenDirectMessage = (m) =>
     isDirectChatSelected() &&
@@ -901,13 +1074,37 @@ document.addEventListener("DOMContentLoaded", () => {
     return state.conversations.find((c) => c.userId === state.selectedUserId) || null;
   }
 
+  function updateComposerState() {
+    const blockedLabel = isDirectChatSelected() ? getDirectBlockLabel(getSelectedConversation()) : "";
+    const disabled = !hasSelectedChat() || Boolean(blockedLabel);
+
+    if (els.messageInput) {
+      els.messageInput.disabled = disabled;
+      if (blockedLabel) {
+        els.messageInput.placeholder = blockedLabel;
+      } else if (hasSelectedChat()) {
+        els.messageInput.placeholder = "Type a message...";
+      } else {
+        els.messageInput.placeholder = "Choose a conversation to start messaging.";
+      }
+    }
+
+    [els.sendBtn, els.emojiToggleBtn, els.imageUploadBtn, els.gifToggleBtn].forEach((node) => {
+      if (node) {
+        node.disabled = disabled;
+      }
+    });
+  }
+
   function updateCallButtonState() {
     const selected = getSelectedConversation();
+    const blocked = isDirectChatSelected() && selected && (selected.blockedByViewer || selected.blockedViewer);
     const callBusy = Boolean(state.call.callId || state.call.pendingIncoming);
     const liveCall = Boolean(state.call.callId);
     const callableGroupMembers = isGroupChatSelected() ? getCallableGroupMembers() : [];
     const canStartCall =
       !callBusy &&
+      !blocked &&
       ((isDirectChatSelected() &&
         Boolean(selected && selected.online && selected.userId !== currentUser.id)) ||
         (isGroupChatSelected() && callableGroupMembers.length > 0));
@@ -964,6 +1161,13 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     const selected = getSelectedConversation();
+    const blockLabel = getDirectBlockLabel(selected);
+    if (blockLabel) {
+      els.activeUserPresence.textContent = blockLabel;
+      els.activeUserPresence.style.color = "var(--danger)";
+      return;
+    }
+
     els.activeUserPresence.textContent = selected && selected.online ? "Online" : "Offline";
     els.activeUserPresence.style.color = selected && selected.online ? "#15814a" : "var(--muted)";
   }
@@ -1102,6 +1306,7 @@ document.addEventListener("DOMContentLoaded", () => {
       els.typingIndicator.classList.add("hidden");
       els.typingIndicator.textContent = "";
       updatePresenceLabel();
+      updateComposerState();
       updateCallButtonState();
       renderChatMenu();
       syncMobileLayout();
@@ -1125,6 +1330,7 @@ document.addEventListener("DOMContentLoaded", () => {
       els.typingIndicator.classList.add("hidden");
     }
     updatePresenceLabel();
+    updateComposerState();
     updateCallButtonState();
     renderChatMenu();
     syncMobileLayout();
@@ -1293,6 +1499,8 @@ document.addEventListener("DOMContentLoaded", () => {
           username: c.username,
           avatarUrl: norm(c.avatarUrl),
           online: Boolean(c.online),
+          blockedByViewer: Boolean(c.blockedByViewer),
+          blockedViewer: Boolean(c.blockedViewer),
           lastMessage: c.lastMessage || null,
         };
         state.userMap.set(x.userId, {
@@ -1304,6 +1512,10 @@ document.addEventListener("DOMContentLoaded", () => {
       });
       sortConversations();
     } catch (e) {
+      if (isDirectChatSelected() && /blocked/i.test(String(e && e.message))) {
+        state.messageNodes.clear();
+        els.messagesContainer.innerHTML = "";
+      }
       setStatus(e.message, true);
     }
   }
@@ -1482,6 +1694,8 @@ document.addEventListener("DOMContentLoaded", () => {
         username: ref.username || `User ${uid}`,
         avatarUrl: ref.avatarUrl || null,
         online: Boolean(ref.online),
+        blockedByViewer: false,
+        blockedViewer: false,
         lastMessage: null,
       };
       state.conversations.push(c);
@@ -3333,6 +3547,37 @@ document.addEventListener("DOMContentLoaded", () => {
         await refreshChatLists();
       } catch (error) {
         setStatus(error.message || "Failed to refresh invites.", true);
+      }
+    });
+    socket.on("direct_block_updated", async (payload) => {
+      try {
+        const block = payload && payload.block;
+        const action = String((payload && payload.action) || "").trim().toLowerCase();
+        const blockerId = Number(block && block.blockerId);
+        const blockedId = Number(block && block.blockedId);
+
+        if (state.call.callId && state.call.peerUserId && (
+          (state.call.peerUserId === blockerId && blockedId === currentUser.id) ||
+          (state.call.peerUserId === blockedId && blockerId === currentUser.id)
+        )) {
+          finishCall(false, action === "blocked" ? "Call ended because one user blocked the other." : "Call ended.");
+        }
+
+        if (action === "blocked") {
+          if (blockerId === currentUser.id) {
+            showAnnouncement("User blocked. Direct messages and calls are now locked.");
+          } else if (blockedId === currentUser.id) {
+            showAnnouncement("A user blocked you. Direct messages and calls are now locked.");
+          }
+        } else if (action === "unblocked") {
+          if (blockerId === currentUser.id) {
+            showAnnouncement("User unblocked.");
+          }
+        }
+
+        await refreshChatLists();
+      } catch (error) {
+        setStatus(error.message || "Failed to refresh block state.", true);
       }
     });
 

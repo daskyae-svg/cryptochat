@@ -51,6 +51,18 @@ CREATE TABLE IF NOT EXISTS revoked_certificates (
   INDEX idx_revoked_certificates_revoked_at (revoked_at, user_id)
 );
 
+CREATE TABLE IF NOT EXISTS user_blocks (
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  blocker_id INT NOT NULL,
+  blocked_id INT NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_user_blocks_blocker FOREIGN KEY (blocker_id) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_user_blocks_blocked FOREIGN KEY (blocked_id) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT uq_user_blocks_pair UNIQUE (blocker_id, blocked_id),
+  INDEX idx_user_blocks_blocker (blocker_id, created_at),
+  INDEX idx_user_blocks_blocked (blocked_id, created_at)
+);
+
 DROP TABLE IF EXISTS group_messages;
 DROP TABLE IF EXISTS group_members;
 DROP TABLE IF EXISTS `groups`;
