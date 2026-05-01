@@ -1256,6 +1256,56 @@ async function findUserCertificateById(userId) {
   return rows[0] || null;
 }
 
+async function backfillMissingUserCertificates() {
+  const db = getDb();
+  const [rows] = await db.execute(
+    `
+    SELECT id, username, public_key, certificate
+    FROM users
+    WHERE certificate IS NULL
+       OR TRIM(certificate) = ''
+    ORDER BY id ASC
+    `
+  );
+
+  if (!rows.length) {
+    console.log("[startup] Certificate backfill complete: 0 users updated.");
+    return 0;
+  }
+
+  let updatedCount = 0;
+
+  for (const row of rows) {
+    const publicKey = String(row.public_key || "").trim();
+    if (!publicKey) {
+      console.warn(
+        `[startup] Skipping certificate backfill for user ${row.id} (${row.username}) because public_key is missing.`
+      );
+      continue;
+    }
+
+    const certificateEnvelope = buildSignedUserCertificate({
+      userId: Number(row.id),
+      username: row.username,
+      publicKey,
+    });
+
+    await db.execute(
+      `
+      UPDATE users
+      SET certificate = ?
+      WHERE id = ?
+        AND (certificate IS NULL OR TRIM(certificate) = '')
+      `,
+      [serializeStoredCertificate(certificateEnvelope), row.id]
+    );
+    updatedCount += 1;
+  }
+
+  console.log(`[startup] Certificate backfill complete: ${updatedCount} users updated.`);
+  return updatedCount;
+}
+
 async function ensureUsersExist(senderId, receiverId) {
   const [sender, receiver] = await Promise.all([
     findUserById(senderId),
@@ -3485,6 +3535,7 @@ async function startServer() {
   try {
     initializeCertificateAuthority();
     await initDatabase();
+    await backfillMissingUserCertificates();
     await new Promise((resolve, reject) => {
       const onError = (error) => {
         server.off("listening", onListening);
