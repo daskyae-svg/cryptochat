@@ -1260,49 +1260,71 @@ async function backfillMissingUserCertificates() {
   const db = getDb();
   const [rows] = await db.execute(
     `
-    SELECT id, username, public_key, certificate
+    SELECT id, username, public_key, private_key, certificate
     FROM users
     WHERE certificate IS NULL
        OR TRIM(certificate) = ''
+       OR public_key IS NULL
+       OR TRIM(public_key) = ''
+       OR private_key IS NULL
+       OR TRIM(private_key) = ''
     ORDER BY id ASC
     `
   );
 
   if (!rows.length) {
-    console.log("[startup] Certificate backfill complete: 0 users updated.");
+    console.log("[startup] User identity backfill complete: 0 users updated.");
     return 0;
   }
 
   let updatedCount = 0;
+  let generatedKeyPairCount = 0;
+  let issuedCertificateCount = 0;
 
   for (const row of rows) {
-    const publicKey = String(row.public_key || "").trim();
-    if (!publicKey) {
-      console.warn(
-        `[startup] Skipping certificate backfill for user ${row.id} (${row.username}) because public_key is missing.`
-      );
-      continue;
+    let publicKey = String(row.public_key || "").trim();
+    let privateKey = String(row.private_key || "").trim();
+    let certificateValue = String(row.certificate || "").trim();
+    let repairedIdentity = false;
+
+    if (!publicKey || !privateKey) {
+      const generatedKeys = generateUserRsaKeyPair();
+      publicKey = generatedKeys.publicKey;
+      privateKey = generatedKeys.privateKey;
+      repairedIdentity = true;
+      generatedKeyPairCount += 1;
     }
 
-    const certificateEnvelope = buildSignedUserCertificate({
-      userId: Number(row.id),
-      username: row.username,
-      publicKey,
-    });
+    if (!certificateValue || repairedIdentity) {
+      const certificateEnvelope = buildSignedUserCertificate({
+        userId: Number(row.id),
+        username: row.username,
+        publicKey,
+      });
+      certificateValue = serializeStoredCertificate(certificateEnvelope);
+      issuedCertificateCount += 1;
+      repairedIdentity = true;
+    }
+
+    if (!repairedIdentity) {
+      continue;
+    }
 
     await db.execute(
       `
       UPDATE users
-      SET certificate = ?
+      SET public_key = ?, private_key = ?, certificate = ?
       WHERE id = ?
-        AND (certificate IS NULL OR TRIM(certificate) = '')
       `,
-      [serializeStoredCertificate(certificateEnvelope), row.id]
+      [publicKey, privateKey, certificateValue, row.id]
     );
     updatedCount += 1;
   }
 
-  console.log(`[startup] Certificate backfill complete: ${updatedCount} users updated.`);
+  console.log(
+    `[startup] User identity backfill complete: ${updatedCount} users updated, ` +
+      `${generatedKeyPairCount} key pairs generated, ${issuedCertificateCount} certificates issued.`
+  );
   return updatedCount;
 }
 
