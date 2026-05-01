@@ -12,9 +12,23 @@ const {
   generateSalt,
   hashPassword,
   safeCompareHex,
+  generateRsaKeyPairPem,
   encryptMessage,
   decryptMessage,
+  encryptHybridMessage,
+  decryptHybridMessage,
 } = require("./cryptoUtils");
+const {
+  initializeCertificateAuthority,
+  issueUserCertificate,
+  parseCertificateEnvelope,
+  verifyUserCertificate,
+} = require("./certificateAuthority");
+const {
+  getRevokedCertificateByUserId,
+  revokeCertificateByUserId,
+  listRevokedCertificates,
+} = require("./certificateRevocationList");
 
 const SERVER_PORT = Number(process.env.PORT || process.env.SERVER_PORT || 3000);
 const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN || "*";
@@ -230,12 +244,112 @@ function createHttpError(status, message) {
   return error;
 }
 
+async function assertCertificateNotRevoked(userId, options = {}) {
+  const revokedCertificate = await getRevokedCertificateByUserId(userId);
+  if (!revokedCertificate) {
+    return;
+  }
+
+  if (options.logAttempt) {
+    console.warn(
+      `[crl] Revoked user ${userId} attempted to ${options.logAttempt}. ` +
+        `Revoked at ${revokedCertificate.revokedAt}.`
+    );
+  }
+
+  throw createHttpError(403, "Certificate revoked");
+}
+
+function generateUserRsaKeyPair() {
+  return generateRsaKeyPairPem(2048);
+}
+
 function safeDecrypt(encryptedMessage, iv) {
   try {
     return decryptMessage(encryptedMessage, iv);
   } catch (error) {
     return "[Unable to decrypt message]";
   }
+}
+
+function createDirectMessagePayload(row, currentUserId, decryptedMessage) {
+  const messageType = normalizeMessageType(row.message_type);
+  const message = {
+    id: row.id,
+    senderId: row.sender_id,
+    receiverId: row.receiver_id,
+    messageType,
+    message: decryptedMessage,
+    mediaUrl: row.media_url || null,
+    createdAt: toIsoString(row.created_at),
+    deletedAt: row.deleted_at ? toIsoString(row.deleted_at) : null,
+    status: null,
+  };
+
+  if (currentUserId && row.sender_id === currentUserId && messageType !== MESSAGE_TYPES.DELETED) {
+    message.status = "sent";
+  }
+
+  return message;
+}
+
+function toMessageSecurityError(error) {
+  if (error && error.message === "Message signature verification failed.") {
+    return createHttpError(422, "Message signature is invalid.");
+  }
+  if (error && error.message === "Failed to decrypt message.") {
+    return createHttpError(422, "Failed to decrypt message.");
+  }
+  return error;
+}
+
+function serializeStoredCertificate(certificateEnvelope) {
+  return JSON.stringify(certificateEnvelope);
+}
+
+function buildSignedUserCertificate({ userId, username, publicKey }) {
+  initializeCertificateAuthority();
+  return issueUserCertificate({
+    userId,
+    username,
+    publicKey,
+  });
+}
+
+function requireVerifiedCertificate(certificateValue, label) {
+  initializeCertificateAuthority();
+  if (!certificateValue) {
+    throw createHttpError(422, `${label} certificate is unavailable.`);
+  }
+
+  try {
+    const verificationResult = verifyUserCertificate(certificateValue);
+    if (!verificationResult.valid) {
+      throw createHttpError(422, `${label} certificate is invalid.`);
+    }
+    if (!verificationResult.certificate.publicKey) {
+      throw createHttpError(422, `${label} certificate public key is missing.`);
+    }
+    return verificationResult;
+  } catch (error) {
+    if (error && error.status) {
+      throw error;
+    }
+    throw createHttpError(422, `${label} certificate is invalid.`);
+  }
+}
+
+function requireCertifiedPublicKey(userRecord, label) {
+  if (!userRecord) {
+    throw createHttpError(404, `${label} was not found.`);
+  }
+
+  const verifiedCertificate = requireVerifiedCertificate(userRecord.certificate, label);
+  if (Number(verifiedCertificate.certificate.userId) !== Number(userRecord.id)) {
+    throw createHttpError(422, `${label} certificate does not match the account.`);
+  }
+
+  return verifiedCertificate;
 }
 
 function toPreviewText(message, maxLength = 45) {
@@ -489,30 +603,59 @@ async function getWebRtcConfigForRequest() {
   }
 }
 
-function mapMessageRow(row, currentUserId) {
+async function mapMessageRow(row, currentUserId, userCryptoMap = null) {
   const messageType = normalizeMessageType(row.message_type);
-  const decryptedMessage =
-    messageType === MESSAGE_TYPES.DELETED
-      ? "This message was deleted."
-      : safeDecrypt(row.message_encrypted, row.iv);
-
-  const message = {
-    id: row.id,
-    senderId: row.sender_id,
-    receiverId: row.receiver_id,
-    messageType,
-    message: decryptedMessage,
-    mediaUrl: row.media_url || null,
-    createdAt: toIsoString(row.created_at),
-    deletedAt: row.deleted_at ? toIsoString(row.deleted_at) : null,
-    status: null,
-  };
-
-  if (currentUserId && row.sender_id === currentUserId && messageType !== MESSAGE_TYPES.DELETED) {
-    message.status = "sent";
+  if (messageType === MESSAGE_TYPES.DELETED) {
+    return createDirectMessagePayload(row, currentUserId, "This message was deleted.");
   }
 
-  return message;
+  if (!row.encrypted_aes_key || !row.signature) {
+    return createDirectMessagePayload(
+      row,
+      currentUserId,
+      safeDecrypt(row.message_encrypted, row.iv)
+    );
+  }
+
+  try {
+    const normalizedViewerId = toPositiveInt(currentUserId);
+    if (!normalizedViewerId) {
+      throw createHttpError(422, "Cannot decrypt message without a viewer context.");
+    }
+
+    const resolvedUserCryptoMap =
+      userCryptoMap || (await findUsersCryptoByIds([normalizedViewerId, row.sender_id, row.receiver_id]));
+    const viewerCrypto = resolvedUserCryptoMap.get(normalizedViewerId);
+    const senderCrypto = resolvedUserCryptoMap.get(Number(row.sender_id));
+
+    if (!viewerCrypto || !viewerCrypto.private_key) {
+      throw createHttpError(422, "Viewer private key is unavailable.");
+    }
+    await assertCertificateNotRevoked(row.sender_id);
+    const verifiedSenderCertificate = requireCertifiedPublicKey(senderCrypto, "Sender");
+
+    const encryptedAesKey =
+      normalizedViewerId === Number(row.sender_id)
+        ? row.sender_encrypted_aes_key || row.encrypted_aes_key
+        : row.encrypted_aes_key;
+
+    if (!encryptedAesKey) {
+      throw createHttpError(422, "Encrypted AES key is missing.");
+    }
+
+    const decryptedMessage = decryptHybridMessage({
+      encryptedMessage: row.message_encrypted,
+      iv: row.iv,
+      encryptedAesKey,
+      signature: row.signature,
+      viewerPrivateKey: viewerCrypto.private_key,
+      senderPublicKey: verifiedSenderCertificate.certificate.publicKey,
+    });
+
+    return createDirectMessagePayload(row, currentUserId, decryptedMessage);
+  } catch (error) {
+    throw toMessageSecurityError(error);
+  }
 }
 
 function mapGroupMessageRow(row, currentUserId) {
@@ -1057,6 +1200,62 @@ async function findUserById(userId) {
   return rows[0] || null;
 }
 
+async function findUsersCryptoByIds(userIds) {
+  const safeUserIds = uniquePositiveInts(userIds);
+  const cryptoMap = new Map();
+
+  if (!safeUserIds.length) {
+    return cryptoMap;
+  }
+
+  const db = getDb();
+  const placeholders = safeUserIds.map(() => "?").join(", ");
+  const [rows] = await db.execute(
+    `
+    SELECT id, username, avatar_url, public_key, private_key, certificate
+    FROM users
+    WHERE id IN (${placeholders})
+    `,
+    safeUserIds
+  );
+
+  rows.forEach((row) => {
+    cryptoMap.set(Number(row.id), row);
+  });
+
+  return cryptoMap;
+}
+
+async function findUserPublicKeyById(userId) {
+  const db = getDb();
+  const [rows] = await db.execute(
+    `
+    SELECT id, username, public_key, certificate
+    FROM users
+    WHERE id = ?
+    LIMIT 1
+    `,
+    [userId]
+  );
+
+  return rows[0] || null;
+}
+
+async function findUserCertificateById(userId) {
+  const db = getDb();
+  const [rows] = await db.execute(
+    `
+    SELECT id, username, certificate
+    FROM users
+    WHERE id = ?
+    LIMIT 1
+    `,
+    [userId]
+  );
+
+  return rows[0] || null;
+}
+
 async function ensureUsersExist(senderId, receiverId) {
   const [sender, receiver] = await Promise.all([
     findUserById(senderId),
@@ -1075,19 +1274,80 @@ async function persistEncryptedMessage({
   const db = getDb();
   const safeMessageText = String(messageText || "");
   const safeMessageType = normalizeMessageType(messageType);
-  const { encryptedMessage, iv } = encryptMessage(safeMessageText);
+  await assertCertificateNotRevoked(senderId, {
+    logAttempt: `send a direct ${safeMessageType} message to user ${receiverId}`,
+  });
+  const userCryptoMap = await findUsersCryptoByIds([senderId, receiverId]);
+  const senderCrypto = userCryptoMap.get(Number(senderId));
+  const receiverCrypto = userCryptoMap.get(Number(receiverId));
+  const verifiedSenderCertificate = requireCertifiedPublicKey(senderCrypto, "Sender");
+  const verifiedReceiverCertificate = requireCertifiedPublicKey(receiverCrypto, "Receiver");
+
+  if (!senderCrypto || !senderCrypto.private_key) {
+    throw createHttpError(422, "Sender RSA key pair is unavailable.");
+  }
+  if (!receiverCrypto || !receiverCrypto.private_key) {
+    throw createHttpError(422, "Receiver RSA key pair is unavailable.");
+  }
+
+  const hybridEnvelope = encryptHybridMessage(safeMessageText, {
+    senderPrivateKey: senderCrypto.private_key,
+    senderPublicKey: verifiedSenderCertificate.certificate.publicKey,
+    receiverPublicKey: verifiedReceiverCertificate.certificate.publicKey,
+  });
+
+  try {
+    decryptHybridMessage({
+      encryptedMessage: hybridEnvelope.encryptedMessage,
+      iv: hybridEnvelope.iv,
+      encryptedAesKey: hybridEnvelope.encryptedAesKey,
+      signature: hybridEnvelope.signature,
+      viewerPrivateKey: receiverCrypto.private_key,
+      senderPublicKey: verifiedSenderCertificate.certificate.publicKey,
+    });
+    decryptHybridMessage({
+      encryptedMessage: hybridEnvelope.encryptedMessage,
+      iv: hybridEnvelope.iv,
+      encryptedAesKey: hybridEnvelope.senderEncryptedAesKey,
+      signature: hybridEnvelope.signature,
+      viewerPrivateKey: senderCrypto.private_key,
+      senderPublicKey: verifiedSenderCertificate.certificate.publicKey,
+    });
+  } catch (error) {
+    throw toMessageSecurityError(error);
+  }
 
   const [result] = await db.execute(
     `
-    INSERT INTO messages (sender_id, receiver_id, message_type, message_encrypted, media_url, iv)
-    VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO messages (
+      sender_id,
+      receiver_id,
+      message_type,
+      message_encrypted,
+      encrypted_aes_key,
+      sender_encrypted_aes_key,
+      signature,
+      media_url,
+      iv
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     `,
-    [senderId, receiverId, safeMessageType, encryptedMessage, mediaUrl || null, iv]
+    [
+      senderId,
+      receiverId,
+      safeMessageType,
+      hybridEnvelope.encryptedMessage,
+      hybridEnvelope.encryptedAesKey,
+      hybridEnvelope.senderEncryptedAesKey,
+      hybridEnvelope.signature,
+      mediaUrl || null,
+      hybridEnvelope.iv,
+    ]
   );
 
   const [rows] = await db.execute(
     `
-    SELECT id, sender_id, receiver_id, message_type, message_encrypted, media_url, iv, created_at, deleted_at
+    SELECT id, sender_id, receiver_id, message_type, media_url, created_at, deleted_at
     FROM messages
     WHERE id = ?
     LIMIT 1
@@ -1095,7 +1355,7 @@ async function persistEncryptedMessage({
     [result.insertId]
   );
 
-  return mapMessageRow(rows[0]);
+  return createDirectMessagePayload(rows[0], senderId, safeMessageText);
 }
 
 async function persistEncryptedGroupMessage({
@@ -1381,20 +1641,50 @@ app.post("/signup", async (req, res) => {
 
     const salt = generateSalt();
     const passwordHash = hashPassword(password, salt);
-
+    const { publicKey, privateKey } = generateUserRsaKeyPair();
     const db = getDb();
-    const [result] = await db.execute(
-      `
-      INSERT INTO users (username, password_hash, salt)
-      VALUES (?, ?, ?)
-      `,
-      [username, passwordHash, salt]
-    );
+    const connection = await db.getConnection();
+    let userId = null;
+
+    try {
+      await connection.beginTransaction();
+
+      const [result] = await connection.execute(
+        `
+        INSERT INTO users (username, password_hash, salt, public_key, private_key, certificate)
+        VALUES (?, ?, ?, ?, ?, NULL)
+        `,
+        [username, passwordHash, salt, publicKey, privateKey]
+      );
+
+      userId = result.insertId;
+      const certificateEnvelope = buildSignedUserCertificate({
+        userId,
+        username,
+        publicKey,
+      });
+
+      await connection.execute(
+        `
+        UPDATE users
+        SET certificate = ?
+        WHERE id = ?
+        `,
+        [serializeStoredCertificate(certificateEnvelope), userId]
+      );
+
+      await connection.commit();
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
 
     return res.status(201).json({
       message: "Signup successful.",
       user: {
-        id: result.insertId,
+        id: userId,
         username,
         avatarUrl: null,
       },
@@ -1406,6 +1696,97 @@ app.post("/signup", async (req, res) => {
 
     console.error("[signup] failed:", error);
     return res.status(500).json({ error: "Failed to create user." });
+  }
+});
+
+app.get("/users/:id/public-key", async (req, res) => {
+  try {
+    const userId = toPositiveInt(req.params.id);
+    if (!userId) {
+      return res.status(400).json({ error: "Valid user id is required." });
+    }
+
+    const user = await findUserPublicKeyById(userId);
+    if (!user) {
+      return res.status(404).json({ error: "User not found." });
+    }
+    const verifiedCertificate = requireCertifiedPublicKey(user, "User");
+
+    return res.json({
+      userId: Number(user.id),
+      username: user.username,
+      publicKey: verifiedCertificate.certificate.publicKey,
+    });
+  } catch (error) {
+    const status = error.status || 500;
+    if (status >= 500) {
+      console.error("[users:public-key] failed:", error);
+    }
+    return res.status(status).json({ error: error.message || "Failed to fetch public key." });
+  }
+});
+
+app.get("/users/:id/certificate", async (req, res) => {
+  try {
+    const userId = toPositiveInt(req.params.id);
+    if (!userId) {
+      return res.status(400).json({ error: "Valid user id is required." });
+    }
+
+    const user = await findUserCertificateById(userId);
+    if (!user) {
+      return res.status(404).json({ error: "User not found." });
+    }
+
+    const envelope = parseCertificateEnvelope(user.certificate);
+    return res.json({
+      userId: Number(user.id),
+      username: user.username,
+      certificate: envelope.certificate,
+      signature: envelope.signature,
+    });
+  } catch (error) {
+    const status = error.status || 500;
+    if (status >= 500) {
+      console.error("[users:certificate] failed:", error);
+    }
+    return res.status(status).json({ error: error.message || "Failed to fetch certificate." });
+  }
+});
+
+app.post("/revoke/:userId", async (req, res) => {
+  try {
+    const userId = toPositiveInt(req.params.userId);
+    if (!userId) {
+      return res.status(400).json({ error: "Valid user id is required." });
+    }
+
+    const user = await findUserById(userId);
+    if (!user) {
+      return res.status(404).json({ error: "User not found." });
+    }
+
+    const revokedCertificate = await revokeCertificateByUserId(userId);
+    return res.status(201).json({
+      message: "Certificate revoked.",
+      revoked: revokedCertificate,
+    });
+  } catch (error) {
+    const status = error.status || 500;
+    if (status >= 500) {
+      console.error("[revoke] failed:", error);
+    }
+    return res.status(status).json({ error: error.message || "Failed to revoke certificate." });
+  }
+});
+
+app.get("/crl", async (_req, res) => {
+  try {
+    const revokedUsers = await listRevokedCertificates();
+    return res.json({ revokedUsers });
+  } catch (error) {
+    console.error("[crl] failed:", error);
+    return res.status(500).json({ error: "Failed to load certificate revocation list." });
   }
 });
 
@@ -1612,19 +1993,28 @@ app.post("/profile/username", async (req, res) => {
       return res.status(400).json({ error: usernameValidationError });
     }
 
-    const existingUser = await findUserById(userId);
+    const userCryptoMap = await findUsersCryptoByIds([userId]);
+    const existingUser = userCryptoMap.get(Number(userId));
     if (!existingUser) {
       return res.status(404).json({ error: "User not found." });
     }
+    if (!existingUser.public_key) {
+      return res.status(422).json({ error: "User public key is unavailable." });
+    }
 
     const db = getDb();
+    const certificateEnvelope = buildSignedUserCertificate({
+      userId,
+      username: newUsername,
+      publicKey: existingUser.public_key,
+    });
     await db.execute(
       `
       UPDATE users
-      SET username = ?
+      SET username = ?, certificate = ?
       WHERE id = ?
       `,
-      [newUsername, userId]
+      [newUsername, serializeStoredCertificate(certificateEnvelope), userId]
     );
 
     const payload = {
@@ -1679,6 +2069,9 @@ app.get("/conversations", async (req, res) => {
         m.receiver_id,
         m.message_type,
         m.message_encrypted,
+        m.encrypted_aes_key,
+        m.sender_encrypted_aes_key,
+        m.signature,
         m.media_url,
         m.iv,
         m.created_at,
@@ -1732,30 +2125,53 @@ app.get("/conversations", async (req, res) => {
       params
     );
 
-    const conversations = rows.map((row) => {
+    const userCryptoMap = await findUsersCryptoByIds([
+      userId,
+      ...rows.map((row) => Number(row.user_id)).filter(Boolean),
+    ]);
+
+    const conversations = await Promise.all(rows.map(async (row) => {
       let lastMessage = null;
       if (row.message_id) {
-        const mapped = mapMessageRow(
-          {
-            id: row.message_id,
-            sender_id: row.sender_id,
-            receiver_id: row.receiver_id,
-            message_type: row.message_type,
-            message_encrypted: row.message_encrypted,
-            media_url: row.media_url,
-            iv: row.iv,
-            created_at: row.created_at,
-            deleted_at: row.deleted_at,
-          },
-          userId
-        );
-        lastMessage = {
-          id: mapped.id,
-          senderId: mapped.senderId,
-          preview: messagePreviewFromType(mapped.messageType, mapped.message),
-          messageType: mapped.messageType,
-          createdAt: mapped.createdAt,
-        };
+        try {
+          const mapped = await mapMessageRow(
+            {
+              id: row.message_id,
+              sender_id: row.sender_id,
+              receiver_id: row.receiver_id,
+              message_type: row.message_type,
+              message_encrypted: row.message_encrypted,
+              encrypted_aes_key: row.encrypted_aes_key,
+              sender_encrypted_aes_key: row.sender_encrypted_aes_key,
+              signature: row.signature,
+              media_url: row.media_url,
+              iv: row.iv,
+              created_at: row.created_at,
+              deleted_at: row.deleted_at,
+            },
+            userId,
+            userCryptoMap
+          );
+          lastMessage = {
+            id: mapped.id,
+            senderId: mapped.senderId,
+            preview: messagePreviewFromType(mapped.messageType, mapped.message),
+            messageType: mapped.messageType,
+            createdAt: mapped.createdAt,
+          };
+        } catch (error) {
+          if (error.message === "Certificate revoked") {
+            lastMessage = {
+              id: row.message_id,
+              senderId: row.sender_id,
+              preview: "Certificate revoked",
+              messageType: MESSAGE_TYPES.TEXT,
+              createdAt: toIsoString(row.created_at),
+            };
+          } else {
+            throw error;
+          }
+        }
       }
 
       return {
@@ -1765,7 +2181,7 @@ app.get("/conversations", async (req, res) => {
         online: isUserOnline(row.user_id),
         lastMessage,
       };
-    });
+    }));
 
     return res.json({ conversations });
   } catch (error) {
@@ -2252,7 +2668,19 @@ app.get("/messages/:userId", async (req, res) => {
     const db = getDb();
     const [rows] = await db.execute(
       `
-      SELECT id, sender_id, receiver_id, message_type, message_encrypted, media_url, iv, created_at, deleted_at
+      SELECT
+        id,
+        sender_id,
+        receiver_id,
+        message_type,
+        message_encrypted,
+        encrypted_aes_key,
+        sender_encrypted_aes_key,
+        signature,
+        media_url,
+        iv,
+        created_at,
+        deleted_at
       FROM messages
       WHERE (sender_id = ? AND receiver_id = ?)
          OR (sender_id = ? AND receiver_id = ?)
@@ -2262,13 +2690,14 @@ app.get("/messages/:userId", async (req, res) => {
     );
 
     const otherUserOnline = isUserOnline(otherUserId);
-    const messages = rows.map((row) => {
-      const mapped = mapMessageRow(row, currentUserId);
+    const userCryptoMap = await findUsersCryptoByIds([currentUserId, otherUserId]);
+    const messages = await Promise.all(rows.map(async (row) => {
+      const mapped = await mapMessageRow(row, currentUserId, userCryptoMap);
       if (mapped.senderId === currentUserId && mapped.messageType !== MESSAGE_TYPES.DELETED) {
         mapped.status = otherUserOnline ? "delivered" : "sent";
       }
       return mapped;
-    });
+    }));
 
     return res.json({ messages });
   } catch (error) {
@@ -3054,6 +3483,7 @@ async function startServer() {
   }
 
   try {
+    initializeCertificateAuthority();
     await initDatabase();
     await new Promise((resolve, reject) => {
       const onError = (error) => {
@@ -3074,6 +3504,7 @@ async function startServer() {
     const webRtcConfig = getWebRtcConfig();
     console.log(`[startup] Server listening on port ${SERVER_PORT}`);
     console.log(`[startup] Static client directory: ${clientDir}`);
+    console.log("[startup] Certificate Authority ready: CryptoChat-CA");
     console.log(
       `[startup] WebRTC policy=${webRtcConfig.iceTransportPolicy}, ` +
         `iceServers=${webRtcConfig.iceServers.length}, ` +

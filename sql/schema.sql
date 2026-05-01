@@ -4,6 +4,9 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash VARCHAR(128) NOT NULL,
   salt VARCHAR(64) NOT NULL,
   avatar_url LONGTEXT NULL,
+  public_key TEXT NULL,
+  private_key TEXT NULL,
+  certificate TEXT NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -13,6 +16,9 @@ CREATE TABLE IF NOT EXISTS messages (
   receiver_id INT NOT NULL,
   message_type VARCHAR(20) NOT NULL DEFAULT 'text',
   message_encrypted TEXT NOT NULL,
+  encrypted_aes_key TEXT NULL,
+  sender_encrypted_aes_key TEXT NULL,
+  signature TEXT NULL,
   media_url LONGTEXT NULL,
   deleted_at TIMESTAMP NULL DEFAULT NULL,
   iv VARCHAR(64) NOT NULL,
@@ -35,6 +41,14 @@ CREATE TABLE IF NOT EXISTS direct_invites (
   CONSTRAINT fk_direct_invites_receiver FOREIGN KEY (receiver_id) REFERENCES users(id) ON DELETE CASCADE,
   INDEX idx_direct_invites_receiver_status (receiver_id, status, created_at),
   INDEX idx_direct_invites_sender_status (sender_id, status, created_at)
+);
+
+CREATE TABLE IF NOT EXISTS revoked_certificates (
+  id INT PRIMARY KEY AUTO_INCREMENT,
+  user_id INT NOT NULL UNIQUE,
+  revoked_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_revoked_certificates_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  INDEX idx_revoked_certificates_revoked_at (revoked_at, user_id)
 );
 
 DROP TABLE IF EXISTS group_messages;
