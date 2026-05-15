@@ -3953,9 +3953,6 @@ document.addEventListener("DOMContentLoaded", () => {
     renderCurrentUser();
     buildEmojiPanel();
     setHeader();
-    showAnnouncement(
-      "Add friends, create groups, and share your screen from calls. Accept a friend request before starting a new DM."
-    );
     resetCallUi();
     toggleChatMenu(false);
     syncMobileLayout();

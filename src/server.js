@@ -34,9 +34,12 @@ const SERVER_PORT = Number(process.env.PORT || process.env.SERVER_PORT || 3000);
 const ADMIN_USER_ID = 1;
 const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN || "*";
 const HOST = "0.0.0.0";
-const GIPHY_API_KEY = process.env.GIPHY_API_KEY || "";
-const TENOR_API_KEY = process.env.TENOR_API_KEY || "LIVDSRZULELA";
-const TENOR_CLIENT_KEY = process.env.TENOR_CLIENT_KEY || "cryptochat";
+const GIPHY_API_KEY = String(
+  process.env.GIPHY_API_KEY ||
+    process.env.GIPHY_APIKEY ||
+    process.env["GIPHY API KEY"] ||
+    ""
+).trim();
 const DEFAULT_STUN_URLS = [
   "stun:stun.l.google.com:19302",
   "stun:stun1.l.google.com:19302",
@@ -3112,78 +3115,60 @@ app.get("/gifs/search", async (req, res) => {
       });
     }
 
-    if (GIPHY_API_KEY) {
-      const url = new URL("https://api.giphy.com/v1/gifs/search");
-      url.searchParams.set("api_key", GIPHY_API_KEY);
-      url.searchParams.set("q", query);
-      url.searchParams.set("limit", String(limit));
-      url.searchParams.set("rating", "pg-13");
-      url.searchParams.set("lang", "en");
-
-      const response = await fetch(url, {
-        headers: { Accept: "application/json" },
+    if (!GIPHY_API_KEY) {
+      return res.status(503).json({
+        error: "GIPHY API key is not configured on the server.",
       });
-
-      if (!response.ok) {
-        throw new Error(`GIPHY responded with status ${response.status}`);
-      }
-
-      const data = await response.json();
-      const gifs = (data.data || [])
-        .map((gif) => ({
-          id: `giphy_${gif.id}`,
-          title: gif.title || "GIF",
-          previewUrl:
-            gif.images?.fixed_width_small_still?.url ||
-            gif.images?.fixed_width_small?.url ||
-            gif.images?.preview_gif?.url ||
-            null,
-          mediaUrl:
-            gif.images?.downsized_medium?.url ||
-            gif.images?.downsized?.url ||
-            gif.images?.original?.url ||
-            null,
-        }))
-        .filter((gif) => Boolean(gif.mediaUrl));
-
-      return res.json({ gifs });
     }
 
-    const tenorUrl = new URL("https://tenor.googleapis.com/v2/search");
-    tenorUrl.searchParams.set("key", TENOR_API_KEY);
-    tenorUrl.searchParams.set("client_key", TENOR_CLIENT_KEY);
-    tenorUrl.searchParams.set("q", query);
-    tenorUrl.searchParams.set("limit", String(limit));
-    tenorUrl.searchParams.set("media_filter", "tinygif,gif,mediumgif");
-    tenorUrl.searchParams.set("contentfilter", "medium");
+    const url = new URL("https://api.giphy.com/v1/gifs/search");
+    url.searchParams.set("api_key", GIPHY_API_KEY);
+    url.searchParams.set("q", query);
+    url.searchParams.set("limit", String(limit));
+    url.searchParams.set("rating", "pg-13");
+    url.searchParams.set("lang", "en");
+    url.searchParams.set("bundle", "messaging_non_clips");
 
-    const tenorResponse = await fetch(tenorUrl, {
+    const response = await fetch(url, {
       headers: { Accept: "application/json" },
     });
 
-    if (!tenorResponse.ok) {
-      throw new Error(`Tenor responded with status ${tenorResponse.status}`);
+    if (!response.ok) {
+      let providerMessage = "";
+      try {
+        const errorPayload = await response.json();
+        providerMessage =
+          errorPayload && typeof errorPayload.message === "string"
+            ? errorPayload.message
+            : "";
+      } catch (_error) {
+        providerMessage = "";
+      }
+
+      throw new Error(
+        providerMessage
+          ? `GIPHY error: ${providerMessage}`
+          : `GIPHY responded with status ${response.status}`
+      );
     }
 
-    const tenorData = await tenorResponse.json();
-    const gifs = (tenorData.results || [])
+    const data = await response.json();
+    const gifs = (data.data || [])
       .map((gif) => {
-        const mediaFormats = gif.media_formats || {};
         const previewUrl =
-          mediaFormats.tinygif?.preview ||
-          mediaFormats.tinygif?.url ||
-          mediaFormats.gif?.preview ||
-          mediaFormats.gif?.url ||
+          gif.images?.fixed_width_small_still?.url ||
+          gif.images?.fixed_width_small?.url ||
+          gif.images?.preview_gif?.url ||
           null;
         const mediaUrl =
-          mediaFormats.mediumgif?.url ||
-          mediaFormats.gif?.url ||
-          mediaFormats.tinygif?.url ||
+          gif.images?.downsized_medium?.url ||
+          gif.images?.downsized?.url ||
+          gif.images?.original?.url ||
           null;
 
         return {
-          id: `tenor_${gif.id}`,
-          title: gif.content_description || "GIF",
+          id: `giphy_${gif.id}`,
+          title: gif.title || "GIF",
           previewUrl,
           mediaUrl,
         };
