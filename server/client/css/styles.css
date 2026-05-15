@@ -19,6 +19,9 @@
   --shadow-lg: 0 28px 70px rgba(24, 40, 74, 0.12);
   --shadow-sm: 0 10px 24px rgba(28, 43, 74, 0.08);
   --panel-blur: blur(20px);
+  --scroll-track: rgba(219, 227, 241, 0.8);
+  --scroll-thumb: rgba(125, 143, 176, 0.9);
+  --scroll-thumb-hover: rgba(98, 117, 150, 0.96);
 }
 
 body.theme-dark {
@@ -41,6 +44,9 @@ body.theme-dark {
   --bubble-other: rgba(35, 35, 35, 0.96);
   --shadow-lg: 0 34px 84px rgba(0, 0, 0, 0.34);
   --shadow-sm: 0 12px 28px rgba(0, 0, 0, 0.24);
+  --scroll-track: rgba(29, 29, 29, 0.96);
+  --scroll-thumb: rgba(104, 104, 104, 0.9);
+  --scroll-thumb-hover: rgba(137, 137, 137, 0.96);
 }
 
 html,
@@ -50,6 +56,27 @@ body {
 
 * {
   box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scroll-thumb) var(--scroll-track);
+}
+
+*::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--scroll-track);
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--scroll-thumb);
+  border-radius: 999px;
+  border: 3px solid var(--scroll-track);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--scroll-thumb-hover);
 }
 
 body {
