@@ -31,7 +31,7 @@ const {
 } = require("./certificateRevocationList");
 
 const SERVER_PORT = Number(process.env.PORT || process.env.SERVER_PORT || 3000);
-const ADMIN_USER_ID = 2;
+const ADMIN_USER_ID = 1;
 const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN || "*";
 const HOST = "0.0.0.0";
 const GIPHY_API_KEY = process.env.GIPHY_API_KEY || "";

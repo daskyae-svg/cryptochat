@@ -594,6 +594,7 @@ label {
   height: 100%;
   display: grid;
   grid-template-rows: auto 1fr auto auto auto;
+  position: relative;
   background:
     radial-gradient(circle at top right, color-mix(in srgb, var(--primary) 10%, transparent), transparent 22%),
     linear-gradient(
@@ -613,6 +614,8 @@ label {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  position: relative;
+  z-index: 12;
 }
 
 .chat-user-meta {
@@ -700,6 +703,7 @@ label {
 
 .chat-menu-wrap {
   position: relative;
+  z-index: 30;
 }
 
 .chat-menu-btn {
@@ -719,7 +723,7 @@ label {
   background: color-mix(in srgb, var(--surface) 94%, transparent);
   box-shadow: var(--shadow-sm);
   padding: 10px;
-  z-index: 6;
+  z-index: 60;
   opacity: 0;
   transform: translateY(-10px) scale(0.98);
   transform-origin: top right;
@@ -822,6 +826,8 @@ label {
   flex-direction: column;
   gap: 12px;
   scroll-behavior: smooth;
+  position: relative;
+  z-index: 1;
 }
 
 .message-row {
@@ -956,9 +962,27 @@ label {
 }
 
 .gif-picker {
-  border-top: 1px solid var(--border);
-  background: color-mix(in srgb, var(--surface-muted) 88%, #fff);
-  padding: 10px 12px;
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  bottom: 94px;
+  border: 1px solid var(--border);
+  border-radius: 22px;
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  backdrop-filter: blur(22px);
+  box-shadow: var(--shadow-lg);
+  padding: 12px;
+  z-index: 18;
+  opacity: 0;
+  transform: translateY(14px) scale(0.985);
+  pointer-events: none;
+  transition: opacity 190ms ease, transform 220ms ease;
+}
+
+.gif-picker.is-open {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
 }
 
 .gif-picker-head {
@@ -970,6 +994,50 @@ label {
 .gif-picker-head input {
   border-radius: 10px;
   padding: 8px 10px;
+}
+
+.picker-status {
+  min-height: 20px;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.picker-status.is-error {
+  color: var(--danger);
+}
+
+.picker-status.is-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.loading-spinner {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-top-color: var(--primary);
+  animation: spinner-rotate 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+.loading-state {
+  display: grid;
+  place-items: center;
+  gap: 10px;
+  min-height: 180px;
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+@keyframes spinner-rotate {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .secondary-btn {
@@ -1019,6 +1087,8 @@ label {
   background: color-mix(in srgb, var(--surface) 90%, transparent);
   backdrop-filter: blur(18px);
   padding: 12px 16px 16px;
+  position: relative;
+  z-index: 10;
 }
 
 .call-dock {
@@ -1027,6 +1097,8 @@ label {
   padding: 10px 12px;
   display: grid;
   gap: 12px;
+  position: relative;
+  z-index: 5;
 }
 
 .call-dock.call-dock-collapsed .call-dock-media {
@@ -1387,11 +1459,17 @@ label {
 .call-modal {
   position: fixed;
   inset: 0;
-  z-index: 10;
+  z-index: 90;
   padding: 16px;
   display: grid;
   place-items: center;
   background: rgba(0, 0, 0, 0.35);
+  opacity: 0;
+  transition: opacity 220ms ease;
+}
+
+.call-modal.is-open {
+  opacity: 1;
 }
 
 .call-modal-card {
@@ -1401,6 +1479,12 @@ label {
   background: var(--surface);
   box-shadow: var(--shadow-lg);
   padding: 16px;
+  transform: translateY(18px) scale(0.985);
+  transition: transform 240ms ease;
+}
+
+.call-modal.is-open .call-modal-card {
+  transform: translateY(0) scale(1);
 }
 
 .call-modal-title {
@@ -1678,6 +1762,12 @@ label {
 
   .call-dock {
     padding: 10px;
+  }
+
+  .gif-picker {
+    left: 10px;
+    right: 10px;
+    bottom: 86px;
   }
 
   .call-dock-actions {

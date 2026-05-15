@@ -66,6 +66,7 @@ document.addEventListener("DOMContentLoaded", () => {
     gifPicker: $("gifPicker"),
     closeGifBtn: $("closeGifBtn"),
     gifSearchInput: $("gifSearchInput"),
+    gifStatus: $("gifStatus"),
     gifResults: $("gifResults"),
     sendBtn: $("sendBtn"),
     themeToggleBtn: $("themeToggleBtn"),
@@ -156,6 +157,7 @@ document.addEventListener("DOMContentLoaded", () => {
     },
     inviteDirectory: [],
     inviteSearchTerm: "",
+    inviteDirectoryLoading: false,
     mobileChatOpen: false,
     call: {
       status: CALL.IDLE,
@@ -293,7 +295,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const isGroupChatSelected = () =>
     state.selectedChatKind === CHAT.GROUP && Boolean(state.selectedGroupId);
   const hasSelectedChat = () => isDirectChatSelected() || isGroupChatSelected();
-  const isAdminUser = () => Number(currentUser.id) === 2;
+  const isAdminUser = () => Number(currentUser.id) === 1;
 
   function getSelectedGroup() {
     return state.groups.find((group) => group.id === state.selectedGroupId) || null;
@@ -474,6 +476,12 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   async function loadInviteDirectory() {
+    state.inviteDirectoryLoading = true;
+    if (els.inviteModal && !els.inviteModal.classList.contains("hidden")) {
+      renderInviteDirectoryLoading();
+      setInviteModalStatus("Loading friends...", false);
+    }
+
     try {
       const { users = [] } = await window.Api.fetchUsers(currentUser.id, "", currentUser.id);
       state.inviteDirectory = users
@@ -502,10 +510,13 @@ document.addEventListener("DOMContentLoaded", () => {
         });
 
       updateInviteButtonState();
+      state.inviteDirectoryLoading = false;
       if (els.inviteModal && !els.inviteModal.classList.contains("hidden")) {
+        setInviteModalStatus("", false);
         renderInviteDirectory();
       }
     } catch (error) {
+      state.inviteDirectoryLoading = false;
       setInviteModalStatus(error.message, true);
       setStatus(error.message, true);
     }
@@ -513,6 +524,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function renderInviteDirectory() {
     if (!els.inviteUserOptions) {
+      return;
+    }
+
+    if (state.inviteDirectoryLoading) {
+      renderInviteDirectoryLoading();
       return;
     }
 
@@ -819,8 +835,9 @@ document.addEventListener("DOMContentLoaded", () => {
     setInviteModalStatus("", false);
     toggleChatMenu(false);
     setSettings(false);
-    els.inviteModal.classList.remove("hidden");
+    setAnimatedModalVisibility(els.inviteModal, true);
     els.inviteSearchInput.value = state.inviteSearchTerm;
+    renderInviteDirectoryLoading();
     await loadInviteDirectory();
     renderInviteDirectory();
     els.inviteSearchInput.focus();
@@ -828,7 +845,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function closeInviteModal() {
     setInviteModalStatus("", false);
-    els.inviteModal.classList.add("hidden");
+    setAnimatedModalVisibility(els.inviteModal, false);
   }
 
   function getGroupTypingLabel(group) {
@@ -888,6 +905,59 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function isPanelOpen(node) {
     return Boolean(node && node.classList.contains("is-open"));
+  }
+
+  function setAnimatedModalVisibility(node, show) {
+    setAnimatedPanelVisibility(node, show);
+  }
+
+  function setGifStatus(message, options = {}) {
+    if (!els.gifStatus) {
+      return;
+    }
+
+    const { isError = false, isLoading = false } = options;
+    els.gifStatus.innerHTML = "";
+    els.gifStatus.classList.remove("hidden", "is-error", "is-loading");
+
+    if (!message) {
+      els.gifStatus.classList.add("hidden");
+      return;
+    }
+
+    if (isLoading) {
+      els.gifStatus.classList.add("is-loading");
+      const spinner = document.createElement("span");
+      spinner.className = "loading-spinner";
+      spinner.setAttribute("aria-hidden", "true");
+      const label = document.createElement("span");
+      label.textContent = message;
+      els.gifStatus.append(spinner, label);
+      return;
+    }
+
+    if (isError) {
+      els.gifStatus.classList.add("is-error");
+    }
+
+    els.gifStatus.textContent = message;
+  }
+
+  function renderInviteDirectoryLoading() {
+    if (!els.inviteUserOptions) {
+      return;
+    }
+
+    els.inviteUserOptions.innerHTML = "";
+    const wrap = document.createElement("div");
+    wrap.className = "loading-state";
+    const spinner = document.createElement("span");
+    spinner.className = "loading-spinner";
+    spinner.setAttribute("aria-hidden", "true");
+    const label = document.createElement("span");
+    label.textContent = "Loading friends...";
+    wrap.append(spinner, label);
+    els.inviteUserOptions.appendChild(wrap);
   }
 
   function toggleChatMenu(show) {
@@ -2354,7 +2424,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
     setGroupModalStatus("", false);
     renderGroupEditorOptions();
-    els.groupModal.classList.remove("hidden");
+    setAnimatedModalVisibility(els.groupModal, true);
 
     if (isAddMode) {
       els.groupMemberOptions.focus();
@@ -2369,7 +2439,7 @@ document.addEventListener("DOMContentLoaded", () => {
     state.groupEditor.selectedUserIds = new Set();
     els.groupNameInput.value = "";
     setGroupModalStatus("", false);
-    els.groupModal.classList.add("hidden");
+    setAnimatedModalVisibility(els.groupModal, false);
   }
 
   async function saveGroupEditor() {
@@ -2462,6 +2532,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function renderGifs(gifs) {
     els.gifResults.innerHTML = "";
+    setGifStatus("", { isError: false });
     if (!gifs || !gifs.length) {
       const p = document.createElement("p");
       p.className = "status";
@@ -2496,20 +2567,36 @@ document.addEventListener("DOMContentLoaded", () => {
 
   async function searchGifs(q) {
     if (!q.trim()) {
+      setGifStatus("", { isError: false });
       renderGifs([]);
       return;
     }
     try {
+      setGifStatus("Searching GIFs...", { isLoading: true });
+      els.gifResults.innerHTML = "";
+      const loadingWrap = document.createElement("div");
+      loadingWrap.className = "loading-state";
+      const spinner = document.createElement("span");
+      spinner.className = "loading-spinner";
+      spinner.setAttribute("aria-hidden", "true");
+      const label = document.createElement("span");
+      label.textContent = "Searching GIFs...";
+      loadingWrap.append(spinner, label);
+      els.gifResults.appendChild(loadingWrap);
       renderGifs((await window.Api.searchGifs(q, 18)).gifs || []);
     } catch (e) {
-      setStatus(e.message, true);
+      els.gifResults.innerHTML = "";
+      setGifStatus(e.message || "Failed to search GIFs.", { isError: true });
     }
   }
 
   function toggleGif(show) {
-    const open = typeof show === "boolean" ? show : els.gifPicker.classList.contains("hidden");
-    els.gifPicker.classList.toggle("hidden", !open);
-    if (!open) return;
+    const open = typeof show === "boolean" ? show : !isPanelOpen(els.gifPicker);
+    setAnimatedPanelVisibility(els.gifPicker, open);
+    if (!open) {
+      setGifStatus("", { isError: false });
+      return;
+    }
     els.emojiPanel.classList.add("hidden");
     els.gifSearchInput.focus();
     if (!els.gifResults.children.length) {
