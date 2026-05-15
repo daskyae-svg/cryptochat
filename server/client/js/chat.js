@@ -833,6 +833,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   async function openInviteModal() {
     setInviteModalStatus("", false);
+    toggleGif(false);
     toggleChatMenu(false);
     setSettings(false);
     setAnimatedModalVisibility(els.inviteModal, true);
@@ -1171,6 +1172,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function setSettings(show) {
     if (show) {
+      toggleGif(false);
       toggleChatMenu(false);
     }
     setAnimatedPanelVisibility(els.settingsPanel, show);
@@ -2403,6 +2405,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function openGroupEditor(mode, groupId) {
+    toggleGif(false);
     state.groupEditor.mode = mode === "add" ? "add" : "create";
     state.groupEditor.groupId = groupId || null;
     state.groupEditor.selectedUserIds = new Set();
@@ -2592,6 +2595,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function toggleGif(show) {
     const open = typeof show === "boolean" ? show : !isPanelOpen(els.gifPicker);
+    if (open) {
+      toggleChatMenu(false);
+      setSettings(false);
+    }
     setAnimatedPanelVisibility(els.gifPicker, open);
     if (!open) {
       setGifStatus("", { isError: false });
