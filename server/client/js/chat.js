@@ -182,6 +182,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const MAX_IMG = 2 * 1024 * 1024;
   const GIF_DEFAULT = "funny";
   const MOBILE_CHAT_BREAKPOINT = 760;
+  const PANEL_TRANSITION_MS = 240;
   let announcementHideTimer = null;
   let announcementDismissTimer = null;
   let rtcConfig = {
@@ -860,8 +861,40 @@ document.addEventListener("DOMContentLoaded", () => {
     return `${typingNames.length} people are typing`;
   }
 
+  function setAnimatedPanelVisibility(node, show) {
+    if (!node) {
+      return;
+    }
+
+    if (node._visibilityTimer) {
+      clearTimeout(node._visibilityTimer);
+      node._visibilityTimer = null;
+    }
+
+    if (show) {
+      node.classList.remove("hidden");
+      requestAnimationFrame(() => {
+        node.classList.add("is-open");
+      });
+      return;
+    }
+
+    node.classList.remove("is-open");
+    node._visibilityTimer = setTimeout(() => {
+      node.classList.add("hidden");
+      node._visibilityTimer = null;
+    }, PANEL_TRANSITION_MS);
+  }
+
+  function isPanelOpen(node) {
+    return Boolean(node && node.classList.contains("is-open"));
+  }
+
   function toggleChatMenu(show) {
-    els.chatMenuPanel.classList.toggle("hidden", !show);
+    if (show) {
+      setAnimatedPanelVisibility(els.settingsPanel, false);
+    }
+    setAnimatedPanelVisibility(els.chatMenuPanel, show);
   }
 
   function renderChatMenu() {
@@ -1067,7 +1100,10 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function setSettings(show) {
-    els.settingsPanel.classList.toggle("hidden", !show);
+    if (show) {
+      toggleChatMenu(false);
+    }
+    setAnimatedPanelVisibility(els.settingsPanel, show);
   }
 
   function getSelectedConversation() {
@@ -3603,8 +3639,8 @@ document.addEventListener("DOMContentLoaded", () => {
         els.messageInput.focus();
       }
     });
-    els.navProfileBtn.addEventListener("click", () => setSettings(true));
-    els.navSettingsBtn.addEventListener("click", () => setSettings(true));
+    els.navProfileBtn.addEventListener("click", () => setSettings(!isPanelOpen(els.settingsPanel)));
+    els.navSettingsBtn.addEventListener("click", () => setSettings(!isPanelOpen(els.settingsPanel)));
     els.closeSettingsBtn.addEventListener("click", () => setSettings(false));
     els.mobileBackBtn.addEventListener("click", () => {
       showMobileConversationList();
@@ -3756,18 +3792,35 @@ document.addEventListener("DOMContentLoaded", () => {
 
     els.chatMenuBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      const willShow = els.chatMenuPanel.classList.contains("hidden");
+      const willShow = !isPanelOpen(els.chatMenuPanel);
       toggleChatMenu(willShow);
     });
 
     document.addEventListener("click", (e) => {
-      if (!els.chatMenuPanel || els.chatMenuPanel.classList.contains("hidden")) {
+      if (!isPanelOpen(els.chatMenuPanel)) {
+        if (
+          isPanelOpen(els.settingsPanel) &&
+          !els.settingsPanel.contains(e.target) &&
+          !els.navProfileBtn.contains(e.target) &&
+          !els.navSettingsBtn.contains(e.target)
+        ) {
+          setSettings(false);
+        }
         return;
       }
       if (els.chatMenuPanel.contains(e.target) || els.chatMenuBtn.contains(e.target)) {
         return;
       }
       toggleChatMenu(false);
+
+      if (
+        isPanelOpen(els.settingsPanel) &&
+        !els.settingsPanel.contains(e.target) &&
+        !els.navProfileBtn.contains(e.target) &&
+        !els.navSettingsBtn.contains(e.target)
+      ) {
+        setSettings(false);
+      }
     });
 
     document.addEventListener("keydown", (e) => {
