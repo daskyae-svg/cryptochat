@@ -1132,6 +1132,7 @@ label {
   gap: 12px;
   position: relative;
   z-index: 5;
+  overflow: visible;
 }
 
 .call-dock.call-dock-collapsed .call-dock-media {
@@ -1140,8 +1141,19 @@ label {
 
 .call-dock-media {
   display: none;
-  grid-template-columns: minmax(0, 1.75fr) minmax(180px, 0.9fr);
+  grid-template-columns: minmax(0, 1.25fr) minmax(140px, 0.7fr);
   gap: 10px;
+  position: absolute;
+  right: 12px;
+  bottom: calc(100% + 10px);
+  width: min(460px, calc(100vw - 130px));
+  padding: 10px;
+  border-radius: 22px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(18px);
+  z-index: 18;
 }
 
 .call-dock.call-dock-media-visible .call-dock-media {
@@ -1153,7 +1165,7 @@ label {
 }
 
 .call-dock.call-dock-sharing .call-dock-media {
-  grid-template-columns: minmax(0, 1.95fr) minmax(180px, 0.8fr);
+  grid-template-columns: minmax(0, 1.35fr) minmax(120px, 0.55fr);
 }
 
 .call-dock.call-dock-sharing .local-panel {
@@ -1166,7 +1178,7 @@ label {
 
 .call-video-panel {
   position: relative;
-  min-height: 170px;
+  min-height: 148px;
   border-radius: 18px;
   overflow: hidden;
   background: linear-gradient(145deg, #0f1726, #1b2741);
@@ -1748,9 +1760,18 @@ label {
 
   .call-dock {
     flex-wrap: wrap;
+    overflow: visible;
   }
 
   .call-dock-media {
+    position: static;
+    width: 100%;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
     grid-template-columns: 1fr;
   }
 

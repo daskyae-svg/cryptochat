@@ -2903,7 +2903,9 @@ document.addEventListener("DOMContentLoaded", () => {
     els.muteCallBtn.disabled = true;
     els.shareScreenBtn.disabled = true;
     els.toggleCallViewBtn.disabled = true;
-    els.fullscreenCallBtn.disabled = true;
+    if (els.fullscreenCallBtn) {
+      els.fullscreenCallBtn.disabled = true;
+    }
     els.endCallBtn.disabled = true;
     setAnimatedModalVisibility(els.incomingCallModal, false);
     state.call.mediaCollapsed = false;
@@ -2926,7 +2928,9 @@ document.addEventListener("DOMContentLoaded", () => {
     els.muteCallBtn.disabled = !isActive;
     els.shareScreenBtn.disabled = !state.call.callId;
     els.toggleCallViewBtn.disabled = !callHasExpandedMedia();
-    els.fullscreenCallBtn.disabled = !callHasExpandedMedia();
+    if (els.fullscreenCallBtn) {
+      els.fullscreenCallBtn.disabled = !callHasExpandedMedia();
+    }
     els.endCallBtn.disabled = false;
     state.call.mediaCollapsed = false;
     syncLocalVideoPreview();
@@ -2950,7 +2954,9 @@ document.addEventListener("DOMContentLoaded", () => {
       els.shareScreenBtn.disabled = false;
     }
     els.toggleCallViewBtn.disabled = !callHasExpandedMedia();
-    els.fullscreenCallBtn.disabled = !callHasExpandedMedia();
+    if (els.fullscreenCallBtn) {
+      els.fullscreenCallBtn.disabled = !callHasExpandedMedia();
+    }
     syncCallDockLayout();
   }
 
@@ -3930,9 +3936,11 @@ document.addEventListener("DOMContentLoaded", () => {
     els.toggleCallViewBtn.addEventListener("click", async () => {
       await toggleCallMediaVisibility();
     });
-    els.fullscreenCallBtn.addEventListener("click", async () => {
-      await toggleCallFullscreen();
-    });
+    if (els.fullscreenCallBtn) {
+      els.fullscreenCallBtn.addEventListener("click", async () => {
+        await toggleCallFullscreen();
+      });
+    }
     els.muteCallBtn.addEventListener("click", () => {
       toggleMuteCall();
     });
