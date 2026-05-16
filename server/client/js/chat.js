@@ -3536,9 +3536,15 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function bindSocket() {
-    socket.on("connect", () => {
+    const registerCurrentSocketUser = () => {
       socket.emit("register", { userId: currentUser.id });
-    });
+    };
+
+    socket.on("connect", registerCurrentSocketUser);
+    if (socket.connected) {
+      registerCurrentSocketUser();
+    }
+
     socket.on("disconnect", () => {
       state.typingSentContext = null;
       state.typingUsers.clear();
