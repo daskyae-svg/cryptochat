@@ -1882,6 +1882,33 @@ function emitPresenceUpdate(userId, online) {
   });
 }
 
+function attachSocketToOnlineUser(socket, userId) {
+  const normalizedUserId = toPositiveInt(userId);
+  if (!normalizedUserId) {
+    return;
+  }
+
+  const previousUserId = toPositiveInt(socket.data.userId);
+  if (previousUserId && previousUserId !== normalizedUserId) {
+    const becameOffline = removeSocketFromOnlineUser(previousUserId, socket.id);
+    if (becameOffline) {
+      emitPresenceUpdate(previousUserId, false);
+    }
+  }
+
+  const userKey = String(normalizedUserId);
+  const wasOnline = isUserOnline(normalizedUserId);
+  if (!onlineUsers.has(userKey)) {
+    onlineUsers.set(userKey, new Set());
+  }
+  onlineUsers.get(userKey).add(socket.id);
+  socket.data.userId = normalizedUserId;
+
+  if (!wasOnline) {
+    emitPresenceUpdate(normalizedUserId, true);
+  }
+}
+
 function removeSocketFromOnlineUser(userId, socketId) {
   const userKey = String(userId);
   const sockets = onlineUsers.get(userKey);
@@ -3737,6 +3764,7 @@ io.on("connection", (socket) => {
       if (fromUserId === toUserId) {
         throw createHttpError(400, "Cannot call yourself.");
       }
+      attachSocketToOnlineUser(socket, fromUserId);
       if (registeredUserId && fromUserId !== registeredUserId) {
         throw createHttpError(403, "Invalid caller identity.");
       }
@@ -3801,6 +3829,7 @@ io.on("connection", (socket) => {
       if (!fromUserId || !toUserId || !callId || !answer) {
         throw createHttpError(400, "fromUserId, toUserId, callId, and answer are required.");
       }
+      attachSocketToOnlineUser(socket, fromUserId);
       if (registeredUserId && fromUserId !== registeredUserId) {
         throw createHttpError(403, "Invalid caller identity.");
       }
@@ -3843,6 +3872,7 @@ io.on("connection", (socket) => {
       if (!fromUserId || !toUserId || !callId || !candidate) {
         return;
       }
+      attachSocketToOnlineUser(socket, fromUserId);
       if (registeredUserId && fromUserId !== registeredUserId) {
         return;
       }
@@ -3874,6 +3904,7 @@ io.on("connection", (socket) => {
     if (!fromUserId || !toUserId || !callId) {
       return;
     }
+    attachSocketToOnlineUser(socket, fromUserId);
     if (registeredUserId && fromUserId !== registeredUserId) {
       return;
     }
@@ -3890,6 +3921,7 @@ io.on("connection", (socket) => {
     if (!fromUserId || !toUserId || !callId) {
       return;
     }
+    attachSocketToOnlineUser(socket, fromUserId);
     if (registeredUserId && fromUserId !== registeredUserId) {
       return;
     }

@@ -1977,6 +1977,13 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  function registerSocketForCurrentUser() {
+    if (!socket.connected || !currentUser || !currentUser.id) {
+      return;
+    }
+    socket.emit("register", { userId: currentUser.id });
+  }
+
   function getTypingContext() {
     if (isDirectChatSelected()) {
       return {
@@ -3287,6 +3294,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const callId = `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 
     try {
+      registerSocketForCurrentUser();
       state.call.callId = callId;
       state.call.peerUserId = selected.userId;
       state.call.muted = false;
@@ -3328,6 +3336,7 @@ document.addEventListener("DOMContentLoaded", () => {
     setAnimatedModalVisibility(els.incomingCallModal, false);
 
     try {
+      registerSocketForCurrentUser();
       const profile = state.userMap.get(pending.fromUserId) || {};
       state.call.callId = pending.callId;
       state.call.peerUserId = pending.fromUserId;
@@ -3587,13 +3596,9 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function bindSocket() {
-    const registerCurrentSocketUser = () => {
-      socket.emit("register", { userId: currentUser.id });
-    };
-
-    socket.on("connect", registerCurrentSocketUser);
+    socket.on("connect", registerSocketForCurrentUser);
     if (socket.connected) {
-      registerCurrentSocketUser();
+      registerSocketForCurrentUser();
     }
 
     socket.on("disconnect", () => {
