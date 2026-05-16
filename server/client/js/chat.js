@@ -174,6 +174,8 @@ document.addEventListener("DOMContentLoaded", () => {
       hasRelayCandidate: false,
       pendingIncoming: null,
       pendingRemoteCandidates: [],
+      peerOfflineTimer: null,
+      localSocketOfflineTimer: null,
     },
   };
 
@@ -185,6 +187,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const GIF_DEFAULT = "hello";
   const MOBILE_CHAT_BREAKPOINT = 760;
   const PANEL_TRANSITION_MS = 240;
+  const CALL_RECONNECT_GRACE_MS = 8000;
   let announcementHideTimer = null;
   let announcementDismissTimer = null;
   let rtcConfig = {
@@ -2744,6 +2747,49 @@ document.addEventListener("DOMContentLoaded", () => {
     els.muteCallBtn.classList.toggle("is-muted", Boolean(state.call.muted));
   }
 
+  function clearCallRecoveryTimers() {
+    if (state.call.peerOfflineTimer) {
+      clearTimeout(state.call.peerOfflineTimer);
+      state.call.peerOfflineTimer = null;
+    }
+    if (state.call.localSocketOfflineTimer) {
+      clearTimeout(state.call.localSocketOfflineTimer);
+      state.call.localSocketOfflineTimer = null;
+    }
+  }
+
+  function schedulePeerOfflineGrace(message) {
+    if (!state.call.callId) {
+      return;
+    }
+    if (state.call.peerOfflineTimer) {
+      clearTimeout(state.call.peerOfflineTimer);
+    }
+    setCallStatus(CALL.CONNECTING, "Peer reconnecting...");
+    state.call.peerOfflineTimer = setTimeout(() => {
+      state.call.peerOfflineTimer = null;
+      if (state.call.callId) {
+        finishCall(false, message || "Peer went offline. Call ended.");
+      }
+    }, CALL_RECONNECT_GRACE_MS);
+  }
+
+  function scheduleLocalSocketRecovery() {
+    if (!state.call.callId) {
+      return;
+    }
+    if (state.call.localSocketOfflineTimer) {
+      clearTimeout(state.call.localSocketOfflineTimer);
+    }
+    setCallStatus(CALL.CONNECTING, "Realtime reconnecting...");
+    state.call.localSocketOfflineTimer = setTimeout(() => {
+      state.call.localSocketOfflineTimer = null;
+      if (state.call.callId && !socket.connected) {
+        finishCall(false, "Connection lost. Call ended.");
+      }
+    }, CALL_RECONNECT_GRACE_MS);
+  }
+
   function syncCallDockLayout() {
     if (!els.callDock) {
       return;
@@ -2820,6 +2866,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   function resetCallUi() {
+    clearCallRecoveryTimers();
     els.callDock.classList.add("hidden");
     els.callLabel.textContent = "Call";
     els.callSubLabel.textContent = "";
@@ -2860,6 +2907,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
   function setCallStatus(status, subtitle) {
     state.call.status = status;
+    if (status === CALL.ACTIVE) {
+      clearCallRecoveryTimers();
+    }
     if (subtitle !== undefined) {
       els.callSubLabel.textContent = subtitle;
     }
@@ -3336,6 +3386,7 @@ document.addEventListener("DOMContentLoaded", () => {
     const peerUserId = state.call.peerUserId;
     const callId = state.call.callId;
 
+    clearCallRecoveryTimers();
     clearCallMedia();
 
     state.call.status = CALL.IDLE;
@@ -3550,10 +3601,16 @@ document.addEventListener("DOMContentLoaded", () => {
       state.typingUsers.clear();
       state.typingGroups.clear();
       if (state.call.callId) {
-        finishCall(false, "Connection lost. Call ended.");
+        scheduleLocalSocketRecovery();
       }
       setHeader();
       renderConversations();
+    });
+    socket.on("connect", () => {
+      clearCallRecoveryTimers();
+      if (state.call.callId && state.call.status !== CALL.ACTIVE) {
+        setCallStatus(CALL.CONNECTING, "Reconnected. Waiting for call sync...");
+      }
     });
     socket.on("receive_message", (m) => {
       if (!m || !m.id) return;
@@ -3625,8 +3682,18 @@ document.addEventListener("DOMContentLoaded", () => {
       const online = Boolean(p && p.online);
 
       syncUserProfile(uid, { online });
-      if (state.call.callId && state.call.peerUserId === uid && !online) {
-        finishCall(false, "Peer went offline. Call ended.");
+      if (state.call.callId && state.call.peerUserId === uid) {
+        if (online) {
+          if (state.call.peerOfflineTimer) {
+            clearTimeout(state.call.peerOfflineTimer);
+            state.call.peerOfflineTimer = null;
+          }
+          if (state.call.status !== CALL.ACTIVE) {
+            setCallStatus(CALL.CONNECTING, "Peer is back. Connecting...");
+          }
+        } else {
+          schedulePeerOfflineGrace("Peer went offline. Call ended.");
+        }
       }
       setHeader();
       renderConversations();
