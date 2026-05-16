@@ -2697,11 +2697,17 @@ document.addEventListener("DOMContentLoaded", () => {
     const previewStream = state.call.screenSharing ? state.call.screenStream : null;
     els.localVideoLabel.textContent = "Your Screen";
     els.localVideoFallback.textContent = "Share your screen to present it in the call.";
+    if (state.call.screenSharing && hasLiveVideo(state.call.screenStream)) {
+      state.call.mediaCollapsed = false;
+    }
     updateVideoElement(els.localVideo, els.localVideoFallback, previewStream, true);
     syncCallDockLayout();
   }
 
   function syncRemoteMediaPreview() {
+    if (hasLiveVideo(state.call.remoteStream)) {
+      state.call.mediaCollapsed = false;
+    }
     updateVideoElement(els.remoteVideo, els.remoteVideoFallback, state.call.remoteStream, true);
     if (els.remoteAudio) {
       els.remoteAudio.srcObject = state.call.remoteStream || null;
@@ -2728,6 +2734,10 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!els.fullscreenCallBtn) {
       return;
     }
+    const canFullscreen = callHasExpandedMedia();
+    els.fullscreenCallBtn.classList.toggle("hidden", !canFullscreen);
+    els.fullscreenCallBtn.setAttribute("aria-hidden", canFullscreen ? "false" : "true");
+    els.fullscreenCallBtn.tabIndex = canFullscreen ? 0 : -1;
     els.fullscreenCallBtn.textContent = isCallFullscreenActive() ? "Exit Full Screen" : "Full Screen";
   }
 
@@ -2804,6 +2814,16 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const hasLocalScreen = Boolean(state.call.screenSharing && hasLiveVideo(state.call.screenStream));
     const hasRemoteVideo = hasLiveVideo(state.call.remoteStream);
+    const hasAnyMedia = hasLocalScreen || hasRemoteVideo;
+    if (!hasAnyMedia) {
+      state.call.mediaCollapsed = true;
+      if (isCallFullscreenActive() && typeof document.exitFullscreen === "function") {
+        const exitPromise = document.exitFullscreen();
+        if (exitPromise && typeof exitPromise.catch === "function") {
+          exitPromise.catch(() => {});
+        }
+      }
+    }
     const showMedia = !state.call.mediaCollapsed && (hasLocalScreen || hasRemoteVideo);
 
     els.callDock.classList.toggle("call-dock-collapsed", Boolean(state.call.mediaCollapsed));
@@ -2829,6 +2849,9 @@ document.addEventListener("DOMContentLoaded", () => {
 
   async function toggleCallMediaVisibility() {
     if (!state.call.callId) {
+      return;
+    }
+    if (!callHasExpandedMedia()) {
       return;
     }
 
@@ -3186,6 +3209,7 @@ document.addEventListener("DOMContentLoaded", () => {
       state.call.screenStream = displayStream;
       state.call.screenSharing = true;
       await state.call.videoSender.replaceTrack(screenTrack);
+      state.call.mediaCollapsed = false;
       syncLocalVideoPreview();
       updateCallButtonState();
       setStatus("Screen sharing started.", false);
