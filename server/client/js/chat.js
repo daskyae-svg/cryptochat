@@ -2828,7 +2828,7 @@ document.addEventListener("DOMContentLoaded", () => {
     els.toggleCallViewBtn.disabled = true;
     els.fullscreenCallBtn.disabled = true;
     els.endCallBtn.disabled = true;
-    els.incomingCallModal.classList.add("hidden");
+    setAnimatedModalVisibility(els.incomingCallModal, false);
     state.call.mediaCollapsed = false;
     syncLocalVideoPreview();
     syncRemoteMediaPreview();
@@ -3275,7 +3275,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     state.call.pendingIncoming = null;
-    els.incomingCallModal.classList.add("hidden");
+    setAnimatedModalVisibility(els.incomingCallModal, false);
 
     try {
       const profile = state.userMap.get(pending.fromUserId) || {};
@@ -3328,7 +3328,7 @@ document.addEventListener("DOMContentLoaded", () => {
       toUserId: pending.fromUserId,
     });
     state.call.pendingIncoming = null;
-    els.incomingCallModal.classList.add("hidden");
+    setAnimatedModalVisibility(els.incomingCallModal, false);
     updateCallButtonState();
   }
 
@@ -3397,7 +3397,7 @@ document.addEventListener("DOMContentLoaded", () => {
     resetRemoteIceState(true);
     const profile = state.userMap.get(fromUserId) || {};
     els.incomingCallLabel.textContent = `${profile.username || `User ${fromUserId}`} is calling you.`;
-    els.incomingCallModal.classList.remove("hidden");
+    setAnimatedModalVisibility(els.incomingCallModal, true);
     updateCallButtonState();
   }
 
@@ -3717,8 +3717,11 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     });
 
+    socket.on("incoming_call", handleIncomingCall);
     socket.on("incoming-call", handleIncomingCall);
+    socket.on("call_answer", handleCallAnswer);
     socket.on("call-answered", handleCallAnswer);
+    socket.on("call_ice_candidate", handleCallIceCandidate);
     socket.on("ice-candidate", handleCallIceCandidate);
     socket.on("call_reject", (p) => {
       if (!activeCallMatches(p)) return;
