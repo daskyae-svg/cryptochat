@@ -3790,11 +3790,8 @@ document.addEventListener("DOMContentLoaded", () => {
     });
 
     socket.on("incoming_call", handleIncomingCall);
-    socket.on("incoming-call", handleIncomingCall);
     socket.on("call_answer", handleCallAnswer);
-    socket.on("call-answered", handleCallAnswer);
     socket.on("call_ice_candidate", handleCallIceCandidate);
-    socket.on("ice-candidate", handleCallIceCandidate);
     socket.on("call_reject", (p) => {
       if (!activeCallMatches(p)) return;
       finishCall(false, "Call was declined.");
